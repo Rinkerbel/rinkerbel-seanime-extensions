@@ -380,7 +380,7 @@ class Provider {
         // ---- SeaDex releases nekoBT doesn't have (Nyaa only). Filtered by batch/episode BEFORE any Nyaa page is scraped.
         if (pull) {
             const wanted = seaDex.filter(tr => {
-                if (!tr.url || tr.url.indexOf("nyaa.si") === -1) return false
+                if (!tr.url || !/^https:\/\/nyaa\.si\//.test(tr.url)) return false
                 if (seen.has(tr.infoHash.toLowerCase())) return false
                 const files = tr.files ?? []
                 const isBatch = files.length !== 1
@@ -404,6 +404,7 @@ class Provider {
         for (const r of results) {
             if (!r.infoHash || !isBestByHash.has(r.infoHash)) continue
             r.isBestRelease = true
+            r.link = `https://releases.moe/${media.id}/`
             if (pull && r.name.indexOf("[BEST] ") !== 0 && r.name.indexOf("[ALT] ") !== 0) {
                 r.name = `${isBestByHash.get(r.infoHash) ? "[BEST]" : "[ALT]"} ${r.name}`
             }
