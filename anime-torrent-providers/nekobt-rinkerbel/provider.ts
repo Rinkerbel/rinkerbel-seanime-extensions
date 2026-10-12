@@ -104,20 +104,41 @@ interface MediaContext {
     // true when we could not map this AniList entry to specific nekoBT episodes (movies, unmapped entries).
     // In that case the search uses media_id=anilist-<id> and lets nekoBT narrow to the entry's episodes.
     useExternalId: boolean
-    entry: NekoBTAnilistEntry | null
+    // Every mapping range of this AniList entry (long series span many seasons)
+    entries: NekoBTAnilistEntry[]
     episodes: NekoBTEpisode[]
     // nekoBT episode id -> AniList episode number
     episodeNumberById: Map<string, number>
+}
+
+// The parts of MediaContext that can be stored (no Map)
+interface CachedContext {
+    fallback: boolean
+    mediaId: string
+    useExternalId: boolean
+    // Every mapping range of this AniList entry (long series span many seasons)
+    entries: NekoBTAnilistEntry[]
+    episodes: NekoBTEpisode[]
 }
 
 interface SeaDexTr {
     infoHash: string
     isBest?: boolean
     url?: string
+    groupedUrl?: string
     releaseGroup?: string
     dualAudio?: boolean
     created?: string
     files?: { length: number, name: string }[]
+}
+
+// Details scraped from a Nyaa page. Keyed by info hash, so they never go stale (only seeders drift).
+interface NyaaDetails {
+    name: string
+    seeders: number
+    leechers: number
+    downloads: number
+    formattedSize: string
 }
 
 interface SeaDexRecordsResponse {
@@ -130,8 +151,18 @@ interface SeaDexRecordsResponse {
 
 const API_URL = "https://nekobt.to/api/v1"
 const SEADEX_URL = "https://releases.moe/api/collections/entries/records"
-const PAGE_LIMIT = 50
+const PAGE_LIMIT = 100
 const MAX_PAGES = 5
+
+// How long nekoBT media info and SeaDex lists are reused (only if Seanime gives extensions a store, see cacheGet)
+const CACHE_TTL_MS = 60 * 60 * 1000
+// How long "this anime is not on nekoBT" is remembered
+const MISSING_TTL_MS = 30 * 60 * 1000
+// Finished/cancelled anime don't get new episodes, so their nekoBT media info is reused longer
+const FINISHED_TTL_MS = 24 * 60 * 60 * 1000
+// Above this many episode ids the URL gets huge, so nekoBT is asked to narrow by AniList ID instead
+const MAX_EPISODE_IDS = 150
+const VIDEO_FILE = /\.(mkv|mp4|avi|m2ts|ts|webm|mov|wmv|flv|ogm)$/i
 
 // Rate limits: retry once if the server asks us to wait no longer than this
 const MAX_RATE_LIMIT_RETRIES = 1
@@ -194,6 +225,10 @@ const NYAA_TRACKERS = [
 
 // Nyaa pages scraped per search (the rest of the SeaDex releases are built from SeaDex's own data)
 const MAX_SEADEX_SCRAPES = 12
+// Nyaa pages scraped at the same time (Nyaa rate limits bursts)
+const NYAA_CONCURRENCY = 3
+// Nyaa RSS searches (SeaDex "grouped" search links) per search
+const MAX_NYAA_RSS = 5
 
 const ALL_VIDEO_TYPE_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16]
 
@@ -204,9 +239,7 @@ const ALL_VIDEO_TYPE_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16
 class Provider {
     private mediaCache: Map<number, MediaContext | null> = new Map()
     private bestCache: Map<number, SeaDexTr[]> = new Map()
-    private seaDexTorrentCache: Map<string, { torrent: AnimeTorrent, scraped: boolean }> = new Map()
     private levelByHash: Map<string, number> = new Map()
-    private resolutionCache: Map<string, string> = new Map()
     private nekoIdByHash: Map<string, string> = new Map()
 
     public getSettings(): AnimeProviderSettings {
@@ -305,19 +338,18 @@ class Provider {
             resolution?: string
         },
     ): Promise<AnimeTorrent[]> {
-        const ctx = await this.getMediaContext(media)
+        const [ctx, seaDex] = await Promise.all([this.getMediaContext(media), this.getSeaDexBest(media.id)])
         if (!ctx) console.warn(`nekoBT: No nekoBT media found for AniList ID ${media.id}`)
-
-        const seaDex = await this.getSeaDexBest(media.id)
         const wantedEp = opts.episodeNumber && opts.episodeNumber > 0 ? opts.episodeNumber : undefined
 
-        let results = await this.collect(media, ctx, seaDex, opts, wantedEp, false)
+        const first = await this.collect(media, ctx, seaDex, opts, wantedEp, false)
 
-        // Nothing without batches (e.g. older seasons only released as batches): include batches anyway
-        if (results.length === 0 && opts.batch !== true && wantedEp !== undefined) {
-            results = await this.collect(media, ctx, seaDex, opts, wantedEp, true)
+        // No nekoBT results without batches (e.g. older seasons only released as batches): include batches anyway.
+        // SeaDex releases don't count here, otherwise one SeaDex match would hide every nekoBT batch.
+        if (first.nekoCount === 0 && opts.batch !== true && wantedEp !== undefined) {
+            return (await this.collect(media, ctx, seaDex, opts, wantedEp, true)).torrents
         }
-        return results
+        return first.torrents
     }
 
     private async collect(
@@ -327,9 +359,13 @@ class Provider {
         opts: { query?: string, batch?: boolean, resolution?: string },
         wantedEp: number | undefined,
         includeBatches: boolean,
-    ): Promise<AnimeTorrent[]> {
+    ): Promise<{ torrents: AnimeTorrent[], nekoCount: number }> {
         const results: AnimeTorrent[] = []
         const seen = new Set<string>()
+        // Info hashes of releases added from SeaDex (not found on nekoBT)
+        const pulled = new Set<string>()
+        // nekoBT episode ids per info hash, for the per-episode fansub preference
+        const episodesByHash = new Map<string, string[]>()
 
         // ---- nekoBT
         if (ctx) {
@@ -337,7 +373,6 @@ class Provider {
                 "sort_by=best",
                 "category=0",
                 `limit=${PAGE_LIMIT}`,
-                `media_id=${ctx.useExternalId ? `anilist-${media.id}` : ctx.mediaId}`,
                 "upgraded=false",
             ]
 
@@ -348,7 +383,9 @@ class Provider {
                 const single = this.findEpisode(ctx, wantedEp)
                 if (single) episodeIds = [String(single.id)]
             }
-            if (episodeIds.length > 0) {
+            const byAnilistId = ctx.useExternalId || (!ctx.fallback && episodeIds.length > MAX_EPISODE_IDS)
+            params.push(`media_id=${byAnilistId ? `anilist-${media.id}` : ctx.mediaId}`)
+            if (!byAnilistId && episodeIds.length > 0) {
                 params.push(`episode_ids=${episodeIds.join(",")}`)
                 params.push("episode_match_any=true")
             }
@@ -367,6 +404,7 @@ class Provider {
                 seen.add(hash)
                 if (t.id) this.nekoIdByHash.set(hash, t.id)
                 if (typeof t.level === "number") this.levelByHash.set(hash, t.level)
+                episodesByHash.set(hash, (t.media_episode_ids || []).map(String))
                 results.push(this.toAnimeTorrent(t, ctx))
             }
 
@@ -389,15 +427,22 @@ class Provider {
                 const files = tr.files ?? []
                 const isBatch = files.length !== 1
                 if (opts.batch === true) return isBatch
-                if (wantedEp !== undefined && !isBatch) {
-                    const n = this.parseEpisodeFromName(files[0].name)
-                    return n === -1 || n === wantedEp
+                if (wantedEp !== undefined) {
+                    // Single files and batches alike must contain the episode. Releases whose files
+                    // carry no recognisable episode numbers are kept.
+                    const eps = this.releaseEpisodes(files, ctx, media)
+                    return eps.size === 0 || eps.has(wantedEp)
                 }
                 return true
             })
-            const built = await Promise.all(wanted.map((tr, i) => this.getSeaDexTorrent(tr, media, i < MAX_SEADEX_SCRAPES)))
+            // One Nyaa RSS request per SeaDex search link covers many releases; only what's left is scraped
+            await this.prefetchNyaaDetails(wanted)
+            const built = await this.mapLimited(wanted, NYAA_CONCURRENCY, (tr, i) => this.getSeaDexTorrent(tr, media, ctx, i < MAX_SEADEX_SCRAPES))
             for (const t of built) {
-                if (t.infoHash) seen.add(t.infoHash)
+                if (t.infoHash) {
+                    seen.add(t.infoHash)
+                    pulled.add(t.infoHash)
+                }
                 results.push(t)
             }
         }
@@ -415,20 +460,43 @@ class Provider {
         }
 
         const filtered = await this.filterByResolution(results, opts.resolution)
-        return this.applyFansubPreference(filtered)
+        const torrents = this.applyFansubPreference(filtered, episodesByHash)
+        const nekoCount = torrents.filter(t => !t.infoHash || !pulled.has(t.infoHash)).length
+        return { torrents, nekoCount }
     }
 
-    // "Prefer fansubs": keep only the highest fansub level present (L3, else L2, else L1), else everything.
-    // SeaDex-tagged releases are never removed. Levels are measured on the non-SeaDex results.
-    private applyFansubPreference(results: AnimeTorrent[]): AnimeTorrent[] {
+    // "Prefer fansubs", decided per episode: for every episode, only torrents with the highest sub level available
+    // for that episode are kept (L3, else L2, else L1; if the best is L0 or no subs, everything for that episode stays).
+    // A torrent stays if it is the best option for at least one episode it contains, so a lower-level batch that
+    // covers episodes nobody else has is kept. SeaDex releases are never removed and don't take part.
+    private applyFansubPreference(results: AnimeTorrent[], episodesByHash: Map<string, string[]>): AnimeTorrent[] {
         if (this.getPref("preferFansubs").toLowerCase() !== "true") return results
         const levelOf = (r: AnimeTorrent) => (r.infoHash ? this.levelByHash.get(r.infoHash) : undefined)
-        for (const tier of [3, 2, 1]) {
-            if (results.some(r => !r.isBestRelease && levelOf(r) === tier)) {
-                return results.filter(r => r.isBestRelease || levelOf(r) === tier)
+        const episodesOf = (r: AnimeTorrent) => {
+            const eps = r.infoHash ? episodesByHash.get(r.infoHash) : undefined
+            return eps && eps.length > 0 ? eps : ["?"]
+        }
+
+        const best = new Map<string, number>()
+        for (const r of results) {
+            if (r.isBestRelease) continue
+            const level = levelOf(r)
+            if (level === undefined) continue
+            for (const ep of episodesOf(r)) {
+                const cur = best.get(ep)
+                if (cur === undefined || level > cur) best.set(ep, level)
             }
         }
-        return results
+
+        return results.filter(r => {
+            if (r.isBestRelease) return true
+            const level = levelOf(r)
+            if (level === undefined) return true
+            return episodesOf(r).some(ep => {
+                const top = best.get(ep)
+                return top === undefined || top < 1 || level === top
+            })
+        })
     }
 
     private async fetchAllPages(params: string[]): Promise<NekoBTTorrent[]> {
@@ -455,40 +523,128 @@ class Provider {
         const anilistId = media.id
         if (this.mediaCache.has(anilistId)) return this.mediaCache.get(anilistId)!
 
+        const stored = this.cacheGet<CachedContext>(`nekobt:ctx2:${anilistId}`)
+        if (stored) {
+            console.log(`nekoBT: Using cached media info for AniList ${anilistId}`)
+            const cached = this.buildContext(stored)
+            this.mediaCache.set(anilistId, cached)
+            return cached
+        }
+
+        const missingKey = `nekobt:missing:${anilistId}`
+        if (this.cacheGet<boolean>(missingKey)) {
+            console.log(`nekoBT: AniList ${anilistId} is not on nekoBT (cached)`)
+            return null
+        }
+
+        const meta: { status?: number } = {}
         const resolved = await this.fetchJson<NekoBTResolveResponse>(
             `${API_URL}/media/resolve?id=anilist-${anilistId}`,
+            0,
+            meta,
         )
         if (!resolved || resolved.error || !resolved.data || !resolved.data.media_id) {
-            // Not mapped on nekoBT (yet): try to find the parent series. Failures are not cached.
-            const fb = await this.getFallbackContext(media)
-            if (fb) this.mediaCache.set(anilistId, fb)
+            // Not mapped on nekoBT (yet): try to find the parent series (specials, mini anime).
+            // Adult entries skip this, they are not side stories of a mapped series.
+            let fb: MediaContext | null = null
+            if (media.isAdult) {
+                console.log(`nekoBT: AniList ${anilistId} is marked adult on AniList, skipping the title-based lookup`)
+            } else {
+                fb = await this.getFallbackContext(media)
+            }
+            if (fb) {
+                this.mediaCache.set(anilistId, fb)
+                this.persistContext(anilistId, fb, media)
+            } else if (meta.status === 404) {
+                // Only a real "not found" is remembered, never a network error or rate limit
+                this.cacheSet(missingKey, true, MISSING_TTL_MS)
+            }
             return fb
         }
         const mediaId = resolved.data.media_id
 
         const mediaRes = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${mediaId}`)
         const allEpisodes = mediaRes?.data?.episodes ?? []
-        const entries = mediaRes?.data?.anilist?.entries ?? []
-        const entry = entries.find(e => e.anilist_id === anilistId) ?? null
+        // An AniList entry can have several mapping ranges (One Piece spans 24 seasons plus specials).
+        // Only keep the episodes inside those ranges. This includes season 0 when the entry maps to specials.
+        const mapped = (mediaRes?.data?.anilist?.entries ?? [])
+            .filter(e => e.anilist_id === anilistId && e.season !== null && e.season !== undefined)
+            .map(e => ({ ...e, media: undefined })) // entry.media (titles, tags, ...) is large and not needed later
+        const episodes = mapped.length > 0 ? allEpisodes.filter(e => mapped.some(en => this.inEntry(e, en))) : []
+        const useExternalId = mapped.length === 0 || episodes.length === 0
 
-        // Only keep the episodes belonging to this AniList entry (a nekoBT media can span several seasons/entries).
-        // This includes season 0 when the AniList entry itself is mapped to season 0 (specials, OVAs, mini anime).
-        const mapped = !!entry && entry.season !== null && entry.season !== undefined
-        let episodes: NekoBTEpisode[] = []
-        if (mapped) {
-            episodes = allEpisodes.filter(e => this.inEntry(e, entry!))
-        }
-        const useExternalId = !mapped || episodes.length === 0
-
-        const episodeNumberById = new Map<string, number>()
-        for (const e of episodes) {
-            const num = entry && !entry.ratio ? entry.dst_start + (e.episode - entry.src_start) : e.episode
-            episodeNumberById.set(String(e.id), num)
-        }
-
-        const ctx: MediaContext = { fallback: false, mediaId, useExternalId, entry, episodes, episodeNumberById }
+        const ctx = this.buildContext({ fallback: false, mediaId, useExternalId, entries: mapped, episodes })
         this.mediaCache.set(anilistId, ctx)
+        this.persistContext(anilistId, ctx, media)
         return ctx
+    }
+
+    // nekoBT episode id -> AniList episode number is derived from the entry mapping
+    private buildContext(d: CachedContext): MediaContext {
+        const episodeNumberById = new Map<string, number>()
+        if (!d.fallback) {
+            for (const e of d.episodes) {
+                const entry = d.entries.find(en => this.inEntry(e, en))
+                const num = entry && !entry.ratio ? entry.dst_start + (e.episode - entry.src_start) : e.episode
+                episodeNumberById.set(String(e.id), num)
+            }
+        }
+        return { ...d, episodeNumberById }
+    }
+
+    private persistContext(anilistId: number, ctx: MediaContext, media: Media) {
+        const data: CachedContext = {
+            fallback: ctx.fallback,
+            mediaId: ctx.mediaId,
+            useExternalId: ctx.useExternalId,
+            entries: ctx.entries,
+            episodes: ctx.episodes,
+        }
+        const done = media.status === "FINISHED" || media.status === "CANCELLED"
+        this.cacheSet(`nekobt:ctx2:${anilistId}`, data, done ? FINISHED_TTL_MS : CACHE_TTL_MS)
+    }
+
+    //+ ----------------------------------------------------------------------------------------------
+    // Cache. Seanime appears to create a fresh provider for every search, so plain class fields don't survive.
+    // This uses Seanime's $store if the extension runtime provides one, and silently does nothing otherwise.
+    //+ ----------------------------------------------------------------------------------------------
+
+    private getStore(): any {
+        try {
+            const s = (globalThis as any).$store
+            return s && typeof s.get === "function" && typeof s.set === "function" ? s : null
+        } catch (e) {
+            return null
+        }
+    }
+
+    // Returns null when missing or expired. Expired entries are removed.
+    private cacheGet<T>(key: string): T | null {
+        try {
+            const store = this.getStore()
+            if (!store) return null
+            const raw = store.get(key)
+            if (!raw || typeof raw !== "string") return null
+            const entry = JSON.parse(raw) as { exp: number, v: T }
+            if (!entry) return null
+            if (entry.exp && entry.exp < Date.now()) {
+                if (typeof store.remove === "function") store.remove(key)
+                return null
+            }
+            return entry.v
+        } catch (e) {
+            return null
+        }
+    }
+
+    // ttlMs = null keeps the value until Seanime restarts or reloads the extension
+    private cacheSet(key: string, value: unknown, ttlMs: number | null = CACHE_TTL_MS) {
+        try {
+            const store = this.getStore()
+            if (!store) return
+            store.set(key, JSON.stringify({ exp: ttlMs === null ? 0 : Date.now() + ttlMs, v: value }))
+        } catch (e) {
+        }
     }
 
     private inEntry(e: NekoBTEpisode, entry: NekoBTAnilistEntry): boolean {
@@ -511,7 +667,7 @@ class Provider {
         add(media.romajiTitle)
         add(media.englishTitle)
         const words = (media.romajiTitle || "").split(/\s+/).filter(Boolean)
-        for (let n = words.length - 1; n >= 1; n--) add(words.slice(0, n).join(" "))
+        for (let n = words.length - 1; n >= Math.max(1, words.length - 2); n--) add(words.slice(0, n).join(" "))
         for (const s of media.synonyms || []) add(s)
 
         const checked = new Set<string>()
@@ -546,13 +702,49 @@ class Provider {
                     fallback: true,
                     mediaId: cand.id,
                     useExternalId: false,
-                    entry: null,
+                    entries: [],
                     episodes: orphans,
                     episodeNumberById: new Map<string, number>(),
                 }
             }
         }
         return null
+    }
+
+    // AniList episode numbers contained in a release, from its video file names
+    private releaseEpisodes(files: { name: string }[], ctx: MediaContext | null, media: Media): Set<number> {
+        const out = new Set<number>()
+        for (const f of files) {
+            if (!VIDEO_FILE.test(f.name)) continue
+            const n = this.fileEpisode(f.name, ctx, media)
+            if (n > 0) out.add(n)
+        }
+        return out
+    }
+
+    // AniList episode number of one file, or -1 if unknown.
+    // 1. "S10E01 (0337)": the bracketed number is the absolute episode, if it fits the AniList entry
+    // 2. "S01E04": converted through nekoBT's season mapping for this AniList entry
+    // 3. anything else ("Title - 0053"): parsed by habari
+    private fileEpisode(name: string, ctx: MediaContext | null, media: Media): number {
+        const max = media.episodeCount && media.episodeCount > 0 ? media.episodeCount : Number.MAX_SAFE_INTEGER
+        const abs = name.match(/S\d{1,2}E\d{1,4}\s*[(\[](\d{1,4})[)\]]/i)
+        if (abs) {
+            const n = parseInt(abs[1], 10)
+            if (n >= 1 && n <= max) return n
+        }
+        const se = name.match(/S(\d{1,2})E(\d{1,4})/i)
+        if (se) {
+            const season = parseInt(se[1], 10)
+            const ep = parseInt(se[2], 10)
+            if (ctx && !ctx.fallback) {
+                const probe: NekoBTEpisode = { id: 0, season, episode: ep }
+                const entry = ctx.entries.find(en => !en.ratio && this.inEntry(probe, en))
+                if (entry) return entry.dst_start + (ep - entry.src_start)
+            }
+            return season === 1 ? ep : -1
+        }
+        return this.parseEpisodeFromName(name)
     }
 
     private parseEpisodeFromName(title: string): number {
@@ -583,6 +775,12 @@ class Provider {
     private async getSeaDexBest(anilistId: number): Promise<SeaDexTr[]> {
         const cached = this.bestCache.get(anilistId)
         if (cached) return cached
+        const stored = this.cacheGet<SeaDexTr[]>(`nekobt:seadex2:${anilistId}`)
+        if (stored) {
+            console.log(`nekoBT: Using cached SeaDex releases for AniList ${anilistId}`)
+            this.bestCache.set(anilistId, stored)
+            return stored
+        }
 
         const releases: SeaDexTr[] = []
         try {
@@ -591,21 +789,132 @@ class Provider {
             const data = await this.fetchJson<SeaDexRecordsResponse>(url)
             for (const tr of data?.items?.[0]?.expand?.trs ?? []) {
                 if (!tr.infoHash || tr.infoHash === "<redacted>") continue
-                releases.push(tr)
+                releases.push({
+                    infoHash: tr.infoHash,
+                    isBest: tr.isBest,
+                    url: tr.url,
+                    groupedUrl: tr.groupedUrl,
+                    releaseGroup: tr.releaseGroup,
+                    dualAudio: tr.dualAudio,
+                    created: tr.created,
+                    files: (tr.files ?? []).map(f => ({ length: f.length, name: f.name })),
+                })
             }
-            this.bestCache.set(anilistId, releases)
+            if (data) {
+                // A failed request (null) is not cached, an entry-less anime (empty list) is
+                this.bestCache.set(anilistId, releases)
+                this.cacheSet(`nekobt:seadex2:${anilistId}`, releases)
+            }
         } catch (e) {
             console.warn("nekoBT: Could not fetch SeaDex releases: " + (e as Error).message)
         }
         return releases
     }
 
-    // Builds an AnimeTorrent for a SeaDex release. Single-file releases use their file name; batches use the Nyaa page title.
-    private async getSeaDexTorrent(tr: SeaDexTr, media: Media, scrape: boolean): Promise<AnimeTorrent> {
-        const hash = tr.infoHash.toLowerCase()
-        const cached = this.seaDexTorrentCache.get(hash)
-        if (cached && (cached.scraped || !scrape)) return cached.torrent
+    // SeaDex links most releases to a Nyaa search ("groupedUrl"). The same search as RSS returns title, seeders,
+    // leechers, downloads, size and info hash for every match, so one request replaces many page scrapes.
+    // Releases not found this way fall back to scraping their own page.
+    private async prefetchNyaaDetails(trs: SeaDexTr[]) {
+        const groups = new Map<string, SeaDexTr[]>()
+        for (const tr of trs) {
+            const g = tr.groupedUrl || ""
+            if (!/^https:\/\/nyaa\.si\//.test(g)) continue
+            if (this.cacheGet<NyaaDetails>(`nekobt:nyaa:${tr.infoHash.toLowerCase()}`)) continue
+            const list = groups.get(g) ?? []
+            list.push(tr)
+            groups.set(g, list)
+        }
 
+        let queries = 0
+        for (const [url, list] of groups) {
+            if (queries++ >= MAX_NYAA_RSS) break
+            const rssUrl = this.toNyaaRssUrl(url)
+            const items = await this.fetchNyaaRss(rssUrl)
+            for (const tr of list) {
+                const hash = tr.infoHash.toLowerCase()
+                const d = items.get(hash)
+                if (d) this.cacheSet(`nekobt:nyaa:${hash}`, d, null)
+            }
+        }
+    }
+
+    // "https://nyaa.si/?q=..." -> "https://nyaa.si/?page=rss&q=..."
+    // "https://nyaa.si/user/NAME?q=..." -> "https://nyaa.si/?page=rss&q=...&u=NAME"
+    private toNyaaRssUrl(url: string): string {
+        const m = url.match(/^https:\/\/nyaa\.si\/(?:user\/([^/?#]+)\/?)?\??([^#]*)/)
+        if (!m) return url
+        const user = m[1]
+        const query = (m[2] || "").split("&").filter(kv => kv && kv.indexOf("page=") !== 0).join("&")
+        let out = "https://nyaa.si/?page=rss"
+        if (query) out += "&" + query
+        if (user) out += "&u=" + user
+        return out
+    }
+
+    private async fetchNyaaRss(url: string): Promise<Map<string, NyaaDetails>> {
+        const items = new Map<string, NyaaDetails>()
+        try {
+            const res = await fetch(url, { timeout: 8000 })
+            if (!res.ok) {
+                console.warn(`nekoBT: Nyaa RSS returned HTTP ${res.status}`)
+                return items
+            }
+            const xml = await res.text()
+            if (xml.indexOf("<rss") === -1) return items
+            const itemRe = /<item>([\s\S]*?)<\/item>/g
+            let m: RegExpExecArray | null
+            while ((m = itemRe.exec(xml)) !== null) {
+                const block = m[1]
+                const get = (tag: string) => {
+                    const r = block.match(new RegExp("<" + tag + "[^>]*>([\\s\\S]*?)</" + tag + ">"))
+                    return r ? this.decodeXml(r[1].trim()) : ""
+                }
+                const hash = get("nyaa:infoHash").toLowerCase()
+                if (!hash) continue
+                const num = (s: string) => {
+                    const n = parseInt(s, 10)
+                    return isNaN(n) ? -1 : n
+                }
+                items.set(hash, {
+                    name: get("title"),
+                    seeders: num(get("nyaa:seeders")),
+                    leechers: Math.max(0, num(get("nyaa:leechers"))),
+                    downloads: Math.max(0, num(get("nyaa:downloads"))),
+                    formattedSize: get("nyaa:size"),
+                })
+            }
+        } catch (e) {
+            console.warn("nekoBT: Nyaa RSS failed: " + (e as Error).message)
+        }
+        return items
+    }
+
+    private decodeXml(s: string): string {
+        return s
+            .replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/, "$1")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, "\"")
+            .replace(/&#39;|&apos;/g, "'")
+            .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(parseInt(d, 10)))
+            .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+            .replace(/&amp;/g, "&")
+    }
+
+    // Runs fn over items, at most `limit` at a time
+    private async mapLimited<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+        const out: R[] = []
+        for (let i = 0; i < items.length; i += limit) {
+            const chunk = items.slice(i, i + limit)
+            const res = await Promise.all(chunk.map((item, j) => fn(item, i + j)))
+            for (const r of res) out.push(r)
+        }
+        return out
+    }
+
+    // Builds an AnimeTorrent for a SeaDex release. Single-file releases use their file name; batches use the Nyaa page title.
+    private async getSeaDexTorrent(tr: SeaDexTr, media: Media, ctx: MediaContext | null, scrape: boolean): Promise<AnimeTorrent> {
+        const hash = tr.infoHash.toLowerCase()
         const files = tr.files ?? []
         const single = files.length === 1
         const size = files.reduce((sum, f) => sum + (f.length || 0), 0)
@@ -618,7 +927,15 @@ class Provider {
         let downloads = 0
         let formattedSize = ""
 
-        if (scrape) {
+        const detailsKey = `nekobt:nyaa:${hash}`
+        const details = this.cacheGet<NyaaDetails>(detailsKey)
+        if (details) {
+            if (details.name) name = details.name
+            seeders = details.seeders
+            leechers = details.leechers
+            downloads = details.downloads
+            formattedSize = details.formattedSize
+        } else if (scrape) {
             try {
                 const res = await fetch(tr.url as string, { timeout: 5000 })
                 if (res.ok) {
@@ -635,6 +952,8 @@ class Provider {
                         else if (label === "Downloads:") downloads = parseInt(value) || 0
                         else if (label === "File size:") formattedSize = value
                     })
+                    // Kept until Seanime restarts: the page belongs to an immutable info hash
+                    this.cacheSet(detailsKey, { name: pageTitle || "", seeders, leechers, downloads, formattedSize }, null)
                 }
             } catch (e) {
                 console.warn("nekoBT: Failed to scrape Nyaa page for SeaDex release: " + (e as Error).message)
@@ -660,12 +979,11 @@ class Provider {
             infoHash: hash,
             resolution: this.detectResolution(name) || this.detectResolution(files[0]?.name || ""),
             isBatch: !single,
-            episodeNumber: single ? this.parseEpisodeFromName(files[0].name) : -1,
+            episodeNumber: single ? this.fileEpisode(files[0].name, ctx, media) : -1,
             releaseGroup: tr.releaseGroup || "",
             isBestRelease: true,
             confirmed: true,
         }
-        this.seaDexTorrentCache.set(hash, { torrent, scraped: scrape })
         return torrent
     }
 
@@ -709,11 +1027,13 @@ class Provider {
     private async lookupResolution(t: AnimeTorrent): Promise<string> {
         const id = t.infoHash ? this.nekoIdByHash.get(t.infoHash) : undefined
         if (!id) return ""
-        const cached = this.resolutionCache.get(id)
-        if (cached !== undefined) return cached
+        const key = `nekobt:res:${id}`
+        const cached = this.cacheGet<string>(key)
+        if (cached !== null) return cached
 
         let found = ""
         const res = await this.fetchJson<{ data?: NekoBTTorrentDetail }>(`${API_URL}/torrents/${id}`)
+        if (!res) return ""
         const d = res?.data
         for (const f of d?.files ?? []) {
             found = this.detectResolution(f.name)
@@ -723,7 +1043,7 @@ class Provider {
             const w = d.mediainfo.match(/Width\s*:\s*([\d\s]+)\s*pixels/i)
             if (w) found = this.bucketByWidth(parseInt(w[1].replace(/\s/g, ""), 10))
         }
-        this.resolutionCache.set(id, found)
+        this.cacheSet(key, found, null)
         return found
     }
 
@@ -851,17 +1171,22 @@ class Provider {
 
     // Fetches JSON. On HTTP 429 it waits as long as the server asks (JSON `retry_after` in seconds, or the Cloudflare
     // `Retry-After` header) and retries, as long as the wait is reasonable. $sleep blocks, so the wait is capped.
-    private async fetchJson<T>(url: string, attempt: number = 0): Promise<T | null> {
+    private async fetchJson<T>(url: string, attempt: number = 0, meta?: { status?: number }): Promise<T | null> {
         try {
             const res = await fetch(url)
+            if (meta) meta.status = res.status
             if (res.status === 429) {
                 const waitMs = await this.getRetryDelayMs(res)
                 if (attempt < MAX_RATE_LIMIT_RETRIES && waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
                     console.warn(`nekoBT: Rate limited, retrying in ${Math.round(waitMs / 1000)}s`)
                     $sleep(waitMs)
-                    return await this.fetchJson<T>(url, attempt + 1)
+                    return await this.fetchJson<T>(url, attempt + 1, meta)
                 }
                 console.warn(`nekoBT: Rate limited (HTTP 429), not retrying (wait ${Math.round(waitMs / 1000)}s)`)
+                return null
+            }
+            if (res.status === 404) {
+                console.log(`nekoBT: Not found: ${url}`)
                 return null
             }
             if (!res.ok) {
