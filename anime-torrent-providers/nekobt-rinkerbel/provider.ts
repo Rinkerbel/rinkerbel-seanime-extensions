@@ -265,7 +265,7 @@ class Provider {
         if (NYAA_TRACKERS.some(t => magnet.indexOf(encodeURIComponent(t)) !== -1)) return magnet
 
         // Seanime doesn't tell providers whether the magnet is for debrid or torrent streaming, so this is a manual switch
-        const useUserkey = this.getPref("useUserkey").toLowerCase() !== "false"
+        const useUserkey = this.getPref("useUserkey").toLowerCase() === "true"
         const userkey = this.getPref("userkey")
         if (!useUserkey || !userkey) return magnet
 
