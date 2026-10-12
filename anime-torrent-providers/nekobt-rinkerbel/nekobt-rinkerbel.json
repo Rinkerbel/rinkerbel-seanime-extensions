@@ -1,0 +1,153 @@
+{
+  "id": "nekobt-rinkerbel",
+  "name": "nekoBT",
+  "description": "nekoBT torrent search provider for Seanime. Resolves media via the nekoBT API, supports configurable filters, and tags best releases using SeaDex (releases.moe).",
+  "manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/anime-torrent-providers/nekobt-rinkerbel/nekobt-rinkerbel.json",
+  "version": "1.4.1",
+  "author": "bruuhim, rinkerbel",
+  "type": "anime-torrent-provider",
+  "icon": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/assets/nekobt.png",
+  "language": "typescript",
+  "lang": "multi",
+  "readme": "https://github.com/rinkerbel/rinkerbel-seanime-extensions/tree/main/anime-torrent-providers/nekobt-rinkerbel",
+  "payload": "",
+  "payloadURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/anime-torrent-providers/nekobt-rinkerbel/provider.ts",
+  "userConfig": {
+    "requiresConfig": false,
+    "version": 1,
+    "fields": [
+      {
+        "name": "userkey",
+        "label": "Torrent Key",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "useUserkey",
+        "label": "Adds your private Torrent key to downloads (don't use with debrid)",
+        "type": "switch",
+        "default": "false"
+      },
+      {
+        "name": "pullSeaDex",
+        "label": "Add Seadex torrents to results",
+        "type": "switch",
+        "default": "true"
+      },
+      {
+        "name": "preferFansubs",
+        "label": "Only show the highest sub level available",
+        "type": "switch",
+        "default": "false"
+      },
+      {
+        "name": "subtitleLangs",
+        "label": "Append subtitle languages to torrent names",
+        "type": "switch",
+        "default": "false"
+      },
+      {
+        "name": "videoCodecs",
+        "label": "Comma separated list of video codecs to include",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "videoTypes",
+        "label": "Comma separated list of video types to include",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "excludeVideoTypes",
+        "label": "Comma separated list of video types to exclude",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "audioLang",
+        "label": "Comma separated list of audio languages torrents MUST contain",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "levels",
+        "label": "Comma separated list of subtitle levels to include",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "fansubLang",
+        "label": "Comma separated list of fansub languages to filter by",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "subLang",
+        "label": "Comma separated list of official subtitle languages to filter by",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "hardsub",
+        "label": "Hardsubs",
+        "type": "select",
+        "default": "any",
+        "options": [
+          {
+            "label": "All",
+            "value": "any"
+          },
+          {
+            "label": "Only",
+            "value": "true"
+          },
+          {
+            "label": "Exclude",
+            "value": "false"
+          }
+        ]
+      },
+      {
+        "name": "otl",
+        "label": "OTL (Original Translation)",
+        "type": "select",
+        "default": "any",
+        "options": [
+          {
+            "label": "All",
+            "value": "any"
+          },
+          {
+            "label": "Only",
+            "value": "true"
+          },
+          {
+            "label": "Exclude",
+            "value": "false"
+          }
+        ]
+      },
+      {
+        "name": "mtl",
+        "label": "MTL (Machine Translation)",
+        "type": "select",
+        "default": "any",
+        "options": [
+          {
+            "label": "All",
+            "value": "any"
+          },
+          {
+            "label": "Only",
+            "value": "true"
+          },
+          {
+            "label": "Exclude",
+            "value": "false"
+          }
+        ]
+      }
+    ]
+  }
+}
