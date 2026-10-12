@@ -27,7 +27,7 @@ interface NekoBTTorrent {
     completed: number | string
     groups: NekoBTGroup[]
     batch: boolean
-    level?: number
+    level?: number | null
     audio_lang?: string
     sub_lang?: string
     fsub_lang?: string
@@ -95,7 +95,7 @@ interface NekoBTMediaSearchResponse {
     data?: { results?: { id: string }[] }
 }
 
-interface MediaContext {
+interface NekoMediaInfo {
     // true when the AniList ID did not resolve and we found the parent series through title search + AniList relations.
     // Then `episodes` are the nekoBT episodes that no AniList entry is mapped to (usually specials) and nekoBT gives us
     // no reliable AniList episode numbers for them.
@@ -111,8 +111,8 @@ interface MediaContext {
     episodeNumberById: Map<string, number>
 }
 
-// The parts of MediaContext that can be stored (no Map)
-interface CachedContext {
+// The parts of NekoMediaInfo that can be stored in $store (no Map)
+interface CachedNekoMedia {
     fallback: boolean
     mediaId: string
     useExternalId: boolean
@@ -162,6 +162,8 @@ const MISSING_TTL_MS = 30 * 60 * 1000
 const FINISHED_TTL_MS = 24 * 60 * 60 * 1000
 // Above this many episode ids the URL gets huge, so nekoBT is asked to narrow by AniList ID instead
 const MAX_EPISODE_IDS = 150
+// Sub level used for torrents nekoBT has no level for (lower than -1 = "no subs")
+const UNKNOWN_LEVEL = -2
 const VIDEO_FILE = /\.(mkv|mp4|avi|m2ts|ts|webm|mov|wmv|flv|ogm)$/i
 
 // Rate limits: retry once if the server asks us to wait no longer than this
@@ -237,7 +239,7 @@ const ALL_VIDEO_TYPE_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16
 //+ --------------------------------------------------------------------------------------------------
 
 class Provider {
-    private mediaCache: Map<number, MediaContext | null> = new Map()
+    private mediaCache: Map<number, NekoMediaInfo | null> = new Map()
     private bestCache: Map<number, SeaDexTr[]> = new Map()
     private levelByHash: Map<string, number> = new Map()
     private nekoIdByHash: Map<string, string> = new Map()
@@ -338,23 +340,23 @@ class Provider {
             resolution?: string
         },
     ): Promise<AnimeTorrent[]> {
-        const [ctx, seaDex] = await Promise.all([this.getMediaContext(media), this.getSeaDexBest(media.id)])
-        if (!ctx) console.warn(`nekoBT: No nekoBT media found for AniList ID ${media.id}`)
+        const [nekoMedia, seaDex] = await Promise.all([this.getNekoMedia(media), this.getSeaDexBest(media.id)])
+        if (!nekoMedia) console.warn(`nekoBT: No nekoBT media found for AniList ID ${media.id}`)
         const wantedEp = opts.episodeNumber && opts.episodeNumber > 0 ? opts.episodeNumber : undefined
 
-        const first = await this.collect(media, ctx, seaDex, opts, wantedEp, false)
+        const first = await this.collect(media, nekoMedia, seaDex, opts, wantedEp, false)
 
         // No nekoBT results without batches (e.g. older seasons only released as batches): include batches anyway.
         // SeaDex releases don't count here, otherwise one SeaDex match would hide every nekoBT batch.
         if (first.nekoCount === 0 && opts.batch !== true && wantedEp !== undefined) {
-            return (await this.collect(media, ctx, seaDex, opts, wantedEp, true)).torrents
+            return (await this.collect(media, nekoMedia, seaDex, opts, wantedEp, true)).torrents
         }
         return first.torrents
     }
 
     private async collect(
         media: Media,
-        ctx: MediaContext | null,
+        nekoMedia: NekoMediaInfo | null,
         seaDex: SeaDexTr[],
         opts: { query?: string, batch?: boolean, resolution?: string },
         wantedEp: number | undefined,
@@ -368,7 +370,7 @@ class Provider {
         const episodesByHash = new Map<string, string[]>()
 
         // ---- nekoBT
-        if (ctx) {
+        if (nekoMedia) {
             const params: string[] = [
                 "sort_by=best",
                 "category=0",
@@ -378,13 +380,13 @@ class Provider {
 
             // Without episode_match_any the API only returns torrents containing ALL listed episodes,
             // so it is always enabled and `batch` decides between packs and single episodes.
-            let episodeIds: string[] = ctx.episodes.map(e => String(e.id))
+            let episodeIds: string[] = nekoMedia.episodes.map(e => String(e.id))
             if (wantedEp !== undefined && !opts.batch) {
-                const single = this.findEpisode(ctx, wantedEp)
+                const single = this.findEpisode(nekoMedia, wantedEp)
                 if (single) episodeIds = [String(single.id)]
             }
-            const byAnilistId = ctx.useExternalId || (!ctx.fallback && episodeIds.length > MAX_EPISODE_IDS)
-            params.push(`media_id=${byAnilistId ? `anilist-${media.id}` : ctx.mediaId}`)
+            const byAnilistId = nekoMedia.useExternalId || (!nekoMedia.fallback && episodeIds.length > MAX_EPISODE_IDS)
+            params.push(`media_id=${byAnilistId ? `anilist-${media.id}` : nekoMedia.mediaId}`)
             if (!byAnilistId && episodeIds.length > 0) {
                 params.push(`episode_ids=${episodeIds.join(",")}`)
                 params.push("episode_match_any=true")
@@ -403,13 +405,14 @@ class Provider {
                 if (seen.has(hash)) continue
                 seen.add(hash)
                 if (t.id) this.nekoIdByHash.set(hash, t.id)
-                if (typeof t.level === "number") this.levelByHash.set(hash, t.level)
+                // A missing sub level (null) ranks below every real level for "prefer fansubs"
+                this.levelByHash.set(hash, typeof t.level === "number" ? t.level : UNKNOWN_LEVEL)
                 episodesByHash.set(hash, (t.media_episode_ids || []).map(String))
-                results.push(this.toAnimeTorrent(t, ctx))
+                results.push(this.toAnimeTorrent(t, nekoMedia))
             }
 
             // Fallback mode has no episode mapping: select the episode from the torrent name instead
-            if (ctx.fallback && wantedEp !== undefined && !opts.batch) {
+            if (nekoMedia.fallback && wantedEp !== undefined && !opts.batch) {
                 for (let i = results.length - 1; i >= 0; i--) {
                     const n = results[i].episodeNumber
                     if (n !== -1 && n !== wantedEp) results.splice(i, 1)
@@ -430,14 +433,14 @@ class Provider {
                 if (wantedEp !== undefined) {
                     // Single files and batches alike must contain the episode. Releases whose files
                     // carry no recognisable episode numbers are kept.
-                    const eps = this.releaseEpisodes(files, ctx, media)
+                    const eps = this.releaseEpisodes(files, nekoMedia, media)
                     return eps.size === 0 || eps.has(wantedEp)
                 }
                 return true
             })
             // One Nyaa RSS request per SeaDex search link covers many releases; only what's left is scraped
             await this.prefetchNyaaDetails(wanted)
-            const built = await this.mapLimited(wanted, NYAA_CONCURRENCY, (tr, i) => this.getSeaDexTorrent(tr, media, ctx, i < MAX_SEADEX_SCRAPES))
+            const built = await this.mapLimited(wanted, NYAA_CONCURRENCY, (tr, i) => this.getSeaDexTorrent(tr, media, nekoMedia, i < MAX_SEADEX_SCRAPES))
             for (const t of built) {
                 if (t.infoHash) {
                     seen.add(t.infoHash)
@@ -467,6 +470,7 @@ class Provider {
 
     // "Prefer fansubs", decided per episode: for every episode, only torrents with the highest sub level available
     // for that episode are kept (L3, else L2, else L1; if the best is L0 or no subs, everything for that episode stays).
+    // Torrents without a sub level count as the lowest level, so they're only kept when nothing better exists.
     // A torrent stays if it is the best option for at least one episode it contains, so a lower-level batch that
     // covers episodes nobody else has is kept. SeaDex releases are never removed and don't take part.
     private applyFansubPreference(results: AnimeTorrent[], episodesByHash: Map<string, string[]>): AnimeTorrent[] {
@@ -519,14 +523,14 @@ class Provider {
     // nekoBT media resolution (AniList ID -> nekoBT media id + this entry's episode ids)
     //+ ----------------------------------------------------------------------------------------------
 
-    private async getMediaContext(media: Media): Promise<MediaContext | null> {
+    private async getNekoMedia(media: Media): Promise<NekoMediaInfo | null> {
         const anilistId = media.id
         if (this.mediaCache.has(anilistId)) return this.mediaCache.get(anilistId)!
 
-        const stored = this.cacheGet<CachedContext>(`nekobt:ctx2:${anilistId}`)
+        const stored = this.cacheGet<CachedNekoMedia>(`nekobt:media:${anilistId}`)
         if (stored) {
             console.log(`nekoBT: Using cached media info for AniList ${anilistId}`)
-            const cached = this.buildContext(stored)
+            const cached = this.buildNekoMedia(stored)
             this.mediaCache.set(anilistId, cached)
             return cached
         }
@@ -546,15 +550,15 @@ class Provider {
         if (!resolved || resolved.error || !resolved.data || !resolved.data.media_id) {
             // Not mapped on nekoBT (yet): try to find the parent series (specials, mini anime).
             // Adult entries skip this, they are not side stories of a mapped series.
-            let fb: MediaContext | null = null
+            let fb: NekoMediaInfo | null = null
             if (media.isAdult) {
                 console.log(`nekoBT: AniList ${anilistId} is marked adult on AniList, skipping the title-based lookup`)
             } else {
-                fb = await this.getFallbackContext(media)
+                fb = await this.getFallbackNekoMedia(media)
             }
             if (fb) {
                 this.mediaCache.set(anilistId, fb)
-                this.persistContext(anilistId, fb, media)
+                this.persistNekoMedia(anilistId, fb, media)
             } else if (meta.status === 404) {
                 // Only a real "not found" is remembered, never a network error or rate limit
                 this.cacheSet(missingKey, true, MISSING_TTL_MS)
@@ -573,14 +577,14 @@ class Provider {
         const episodes = mapped.length > 0 ? allEpisodes.filter(e => mapped.some(en => this.inEntry(e, en))) : []
         const useExternalId = mapped.length === 0 || episodes.length === 0
 
-        const ctx = this.buildContext({ fallback: false, mediaId, useExternalId, entries: mapped, episodes })
-        this.mediaCache.set(anilistId, ctx)
-        this.persistContext(anilistId, ctx, media)
-        return ctx
+        const nekoMedia = this.buildNekoMedia({ fallback: false, mediaId, useExternalId, entries: mapped, episodes })
+        this.mediaCache.set(anilistId, nekoMedia)
+        this.persistNekoMedia(anilistId, nekoMedia, media)
+        return nekoMedia
     }
 
     // nekoBT episode id -> AniList episode number is derived from the entry mapping
-    private buildContext(d: CachedContext): MediaContext {
+    private buildNekoMedia(d: CachedNekoMedia): NekoMediaInfo {
         const episodeNumberById = new Map<string, number>()
         if (!d.fallback) {
             for (const e of d.episodes) {
@@ -592,16 +596,16 @@ class Provider {
         return { ...d, episodeNumberById }
     }
 
-    private persistContext(anilistId: number, ctx: MediaContext, media: Media) {
-        const data: CachedContext = {
-            fallback: ctx.fallback,
-            mediaId: ctx.mediaId,
-            useExternalId: ctx.useExternalId,
-            entries: ctx.entries,
-            episodes: ctx.episodes,
+    private persistNekoMedia(anilistId: number, nekoMedia: NekoMediaInfo, media: Media) {
+        const data: CachedNekoMedia = {
+            fallback: nekoMedia.fallback,
+            mediaId: nekoMedia.mediaId,
+            useExternalId: nekoMedia.useExternalId,
+            entries: nekoMedia.entries,
+            episodes: nekoMedia.episodes,
         }
         const done = media.status === "FINISHED" || media.status === "CANCELLED"
-        this.cacheSet(`nekobt:ctx2:${anilistId}`, data, done ? FINISHED_TTL_MS : CACHE_TTL_MS)
+        this.cacheSet(`nekobt:media:${anilistId}`, data, done ? FINISHED_TTL_MS : CACHE_TTL_MS)
     }
 
     //+ ----------------------------------------------------------------------------------------------
@@ -658,7 +662,7 @@ class Provider {
     // 1. Search nekoBT media by the entry's titles (and progressively shortened romaji title).
     // 2. Accept a candidate only if its AniList relations list our AniList ID, which proves it is the parent series.
     // 3. Use every nekoBT episode that no AniList entry is mapped to (typically the season 0 specials).
-    private async getFallbackContext(media: Media): Promise<MediaContext | null> {
+    private async getFallbackNekoMedia(media: Media): Promise<NekoMediaInfo | null> {
         const queries: string[] = []
         const add = (q?: string) => {
             const c = (q || "").trim()
@@ -712,11 +716,11 @@ class Provider {
     }
 
     // AniList episode numbers contained in a release, from its video file names
-    private releaseEpisodes(files: { name: string }[], ctx: MediaContext | null, media: Media): Set<number> {
+    private releaseEpisodes(files: { name: string }[], nekoMedia: NekoMediaInfo | null, media: Media): Set<number> {
         const out = new Set<number>()
         for (const f of files) {
             if (!VIDEO_FILE.test(f.name)) continue
-            const n = this.fileEpisode(f.name, ctx, media)
+            const n = this.fileEpisode(f.name, nekoMedia, media)
             if (n > 0) out.add(n)
         }
         return out
@@ -726,7 +730,7 @@ class Provider {
     // 1. "S10E01 (0337)": the bracketed number is the absolute episode, if it fits the AniList entry
     // 2. "S01E04": converted through nekoBT's season mapping for this AniList entry
     // 3. anything else ("Title - 0053"): parsed by habari
-    private fileEpisode(name: string, ctx: MediaContext | null, media: Media): number {
+    private fileEpisode(name: string, nekoMedia: NekoMediaInfo | null, media: Media): number {
         const max = media.episodeCount && media.episodeCount > 0 ? media.episodeCount : Number.MAX_SAFE_INTEGER
         const abs = name.match(/S\d{1,2}E\d{1,4}\s*[(\[](\d{1,4})[)\]]/i)
         if (abs) {
@@ -737,9 +741,9 @@ class Provider {
         if (se) {
             const season = parseInt(se[1], 10)
             const ep = parseInt(se[2], 10)
-            if (ctx && !ctx.fallback) {
+            if (nekoMedia && !nekoMedia.fallback) {
                 const probe: NekoBTEpisode = { id: 0, season, episode: ep }
-                const entry = ctx.entries.find(en => !en.ratio && this.inEntry(probe, en))
+                const entry = nekoMedia.entries.find(en => !en.ratio && this.inEntry(probe, en))
                 if (entry) return entry.dst_start + (ep - entry.src_start)
             }
             return season === 1 ? ep : -1
@@ -760,9 +764,9 @@ class Provider {
     }
 
     // AniList episode number -> nekoBT episode
-    private findEpisode(ctx: MediaContext, anilistEpisode: number): NekoBTEpisode | null {
-        for (const e of ctx.episodes) {
-            if (ctx.episodeNumberById.get(String(e.id)) === anilistEpisode) return e
+    private findEpisode(nekoMedia: NekoMediaInfo, anilistEpisode: number): NekoBTEpisode | null {
+        for (const e of nekoMedia.episodes) {
+            if (nekoMedia.episodeNumberById.get(String(e.id)) === anilistEpisode) return e
         }
         return null
     }
@@ -913,7 +917,7 @@ class Provider {
     }
 
     // Builds an AnimeTorrent for a SeaDex release. Single-file releases use their file name; batches use the Nyaa page title.
-    private async getSeaDexTorrent(tr: SeaDexTr, media: Media, ctx: MediaContext | null, scrape: boolean): Promise<AnimeTorrent> {
+    private async getSeaDexTorrent(tr: SeaDexTr, media: Media, nekoMedia: NekoMediaInfo | null, scrape: boolean): Promise<AnimeTorrent> {
         const hash = tr.infoHash.toLowerCase()
         const files = tr.files ?? []
         const single = files.length === 1
@@ -979,7 +983,7 @@ class Provider {
             infoHash: hash,
             resolution: this.detectResolution(name) || this.detectResolution(files[0]?.name || ""),
             isBatch: !single,
-            episodeNumber: single ? this.fileEpisode(files[0].name, ctx, media) : -1,
+            episodeNumber: single ? this.fileEpisode(files[0].name, nekoMedia, media) : -1,
             releaseGroup: tr.releaseGroup || "",
             isBestRelease: true,
             confirmed: true,
@@ -1229,7 +1233,7 @@ class Provider {
         return isNaN(n) ? 0 : n
     }
 
-    private toAnimeTorrent(t: NekoBTTorrent, ctx: MediaContext | null): AnimeTorrent {
+    private toAnimeTorrent(t: NekoBTTorrent, nekoMedia: NekoMediaInfo | null): AnimeTorrent {
         const ts = this.toNumber(t.uploaded_at)
         const date = ts > 0 ? new Date(ts).toISOString() : new Date().toISOString()
 
@@ -1240,11 +1244,11 @@ class Provider {
         const ids = (t.media_episode_ids || []).map(String)
         let isBatch = !!t.batch || ids.length > 1
         let episodeNumber = -1
-        if (ctx && !isBatch && ids.length === 1) {
-            const n = ctx.episodeNumberById.get(ids[0])
+        if (nekoMedia && !isBatch && ids.length === 1) {
+            const n = nekoMedia.episodeNumberById.get(ids[0])
             if (n !== undefined) episodeNumber = n
         }
-        if (ctx && ctx.fallback && !isBatch) episodeNumber = this.parseEpisodeFromName(t.title || "")
+        if (nekoMedia && nekoMedia.fallback && !isBatch) episodeNumber = this.parseEpisodeFromName(t.title || "")
 
         const size = this.toNumber(t.filesize)
 
@@ -1266,7 +1270,7 @@ class Provider {
             // Only the primary (uploading) group counts; secondary contributors must not be shown as the release group
             releaseGroup: (Array.isArray(t.groups) ? t.groups.find(g => g.uploading_group) : undefined)?.display_name ?? "",
             isBestRelease: false, // set from SeaDex only
-            confirmed: ctx !== null && !ctx.fallback,
+            confirmed: nekoMedia !== null && !nekoMedia.fallback,
         }
     }
 
