@@ -1,6 +1,6 @@
 {
   "id": "nekobt-rinkerbel",
-  "name": "nekoBT",
+  "name": "nekoBT by rinker",
   "description": "nekoBT torrent search provider for Seanime. Resolves media via the nekoBT API, supports configurable filters, and tags best releases using SeaDex (releases.moe).",
   "manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/anime-torrent-providers/nekobt-rinkerbel/nekobt-rinkerbel.json",
   "version": "1.4.4",
