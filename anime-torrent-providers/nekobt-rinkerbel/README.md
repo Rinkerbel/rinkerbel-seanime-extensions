@@ -37,7 +37,7 @@ Every filter is optional. Leave a field empty to disable it. Lists are comma sep
 | Only show the highest sub level available | off | Shows only the highest fansub level present: level 3, else level 2, else level 1, else everything. SeaDex releases are never hidden. |
 | Append subtitle languages to torrent names | off | Adds the full language names to the end of the name, for example `(English, Spanish, French)`. Official and fansub languages are combined, `enm` counts as English, and regional variants such as `pt-br` and `pt-pt` are merged. This might be helpful when configuring Seanime auto select. |
 
-[^1]: [See rule 14](https://wiki.nekobt.to/rules/) <br>
+[^1]: [See rule 14 of nekoBT](https://wiki.nekobt.to/rules/)
 [^2]: [Public and private download links? What does that mean?](https://wiki.nekobt.to/faq/#public-and-private-download-links-what-does-that-mean)
 
 ### Filters
@@ -88,4 +88,3 @@ Click the filter settings to be send to relevant nekoBT docs for further learnin
 - Original extension by [bruuhim](https://github.com/bruuhim/bruuhim-seanime-extensions).
 - [nekoBT](https://nekobt.to) for the torrent index and API.
 - [SeaDex](https://releases.moe) for best release curation.
-- 
