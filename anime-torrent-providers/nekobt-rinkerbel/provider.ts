@@ -133,6 +133,10 @@ const SEADEX_URL = "https://releases.moe/api/collections/entries/records"
 const PAGE_LIMIT = 50
 const MAX_PAGES = 5
 
+// Rate limits: retry once if the server asks us to wait no longer than this
+const MAX_RATE_LIMIT_RETRIES = 1
+const MAX_RATE_LIMIT_WAIT_MS = 15000
+
 // Shorthands users can type in the manifest config -> nekoBT ids
 const VIDEO_CODECS: Record<string, number> = {
     "other": 0,
@@ -845,11 +849,19 @@ class Provider {
     // Helpers
     //+ ----------------------------------------------------------------------------------------------
 
-    private async fetchJson<T>(url: string): Promise<T | null> {
+    // Fetches JSON. On HTTP 429 it waits as long as the server asks (JSON `retry_after` in seconds, or the Cloudflare
+    // `Retry-After` header) and retries, as long as the wait is reasonable. $sleep blocks, so the wait is capped.
+    private async fetchJson<T>(url: string, attempt: number = 0): Promise<T | null> {
         try {
             const res = await fetch(url)
             if (res.status === 429) {
-                console.warn("nekoBT: Rate limit reached (HTTP 429)")
+                const waitMs = await this.getRetryDelayMs(res)
+                if (attempt < MAX_RATE_LIMIT_RETRIES && waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
+                    console.warn(`nekoBT: Rate limited, retrying in ${Math.round(waitMs / 1000)}s`)
+                    $sleep(waitMs)
+                    return await this.fetchJson<T>(url, attempt + 1)
+                }
+                console.warn(`nekoBT: Rate limited (HTTP 429), not retrying (wait ${Math.round(waitMs / 1000)}s)`)
                 return null
             }
             if (!res.ok) {
@@ -866,6 +878,24 @@ class Provider {
             console.error(`nekoBT: Fetch error: ${(e as Error).message}`)
             return null
         }
+    }
+
+    // nekoBT API limits answer with JSON { retry_after: seconds }, Cloudflare limits with a Retry-After header (seconds)
+    private async getRetryDelayMs(res: any): Promise<number> {
+        try {
+            const body = JSON.parse(await res.text())
+            const seconds = Number(body?.retry_after)
+            if (!isNaN(seconds) && seconds > 0) return Math.ceil(seconds * 1000) + 250
+        } catch (e) {
+        }
+        try {
+            const h = res.headers
+            const raw = h && typeof h.get === "function" ? h.get("retry-after") : h ? (h["retry-after"] ?? h["Retry-After"]) : undefined
+            const seconds = Number(Array.isArray(raw) ? raw[0] : raw)
+            if (!isNaN(seconds) && seconds > 0) return Math.ceil(seconds * 1000) + 250
+        } catch (e) {
+        }
+        return 2000
     }
 
     private toNumber(v: unknown): number {
