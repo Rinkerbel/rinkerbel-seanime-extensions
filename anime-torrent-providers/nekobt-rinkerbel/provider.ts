@@ -89,7 +89,6 @@ interface NekoBTResolveResponse {
     }
 }
 
-// What we keep per AniList entry: the nekoBT media id plus the episodes that belong to this specific entry.
 interface NekoBTMediaSearchResponse {
     error: boolean
     data?: { results?: { id: string }[] }
@@ -101,9 +100,6 @@ interface NekoMediaInfo {
     // no reliable AniList episode numbers for them.
     fallback: boolean
     mediaId: string
-    // true when we could not map this AniList entry to specific nekoBT episodes (movies, unmapped entries).
-    // In that case the search uses media_id=anilist-<id> and lets nekoBT narrow to the entry's episodes.
-    useExternalId: boolean
     // Every mapping range of this AniList entry (long series span many seasons)
     entries: NekoBTAnilistEntry[]
     episodes: NekoBTEpisode[]
@@ -119,7 +115,6 @@ interface NekoMediaInfo {
 interface CachedNekoMedia {
     fallback: boolean
     mediaId: string
-    useExternalId: boolean
     // Every mapping range of this AniList entry (long series span many seasons)
     entries: NekoBTAnilistEntry[]
     episodes: NekoBTEpisode[]
@@ -148,7 +143,7 @@ interface NyaaDetails {
 
 // Parsed search query (Nyaa syntax)
 type QueryNode =
-    | { kind: "term", tokens: string[] }
+    | { kind: "term", text: string, tokens: string[], quoted: boolean }
     | { kind: "and", items: QueryNode[] }
     | { kind: "or", items: QueryNode[] }
     | { kind: "not", item: QueryNode }
@@ -296,9 +291,6 @@ class Provider {
         let magnet = torrent.magnetLink || torrent.downloadUrl || ""
         if (!magnet) return ""
 
-        // SeaDex releases come from Nyaa and never get the private nekoBT tracker
-        if (NYAA_TRACKERS.some(t => magnet.indexOf(encodeURIComponent(t)) !== -1)) return magnet
-
         // Seanime doesn't tell providers whether the magnet is for debrid or torrent streaming, so this is a manual switch
         const useUserkey = this.getPref("useUserkey").toLowerCase() === "true"
         const userkey = this.getPref("userkey")
@@ -310,21 +302,39 @@ class Provider {
             if (parts.length > 1) cleanUserkey = parts[1].split("/")[0]
         }
 
+        // A SeaDex release built from Nyaa data: if nekoBT has the same torrent, use nekoBT's magnet so the key can be added
+        const nekoTracker = /tracker(\.|%2E)nekobt(\.|%2E)to/i
+        if (!nekoTracker.test(magnet) && torrent.infoHash) {
+            const nekoMagnet = await this.findNekoMagnet(torrent.infoHash)
+            if (nekoMagnet) magnet = nekoMagnet
+        }
+
         const trUrl = `https://tracker.nekobt.to/api/tracker/${cleanUserkey}/announce`
         const encodedTr = encodeURIComponent(trUrl)
 
-        // Replace an existing nekoBT tracker URL (encoded or not), otherwise append ours
+        // Replace nekoBT's tracker URL (encoded or not) with the private one
         const regexEncoded = /tr=https%3A%2F%2Ftracker\.nekobt\.to%2Fapi%2Ftracker%2F[a-zA-Z0-9_-]+%2Fannounce/i
         const regexUnencoded = /tr=https:\/\/tracker\.nekobt\.to\/api\/tracker\/[a-zA-Z0-9_-]+\/announce/i
 
-        if (regexEncoded.test(magnet)) {
-            magnet = magnet.replace(regexEncoded, `tr=${encodedTr}`)
-        } else if (regexUnencoded.test(magnet)) {
-            magnet = magnet.replace(regexUnencoded, `tr=${trUrl}`)
-        } else {
-            magnet += `&tr=${encodedTr}`
-        }
+        // Only nekoBT magnets carry the nekoBT tracker. SeaDex releases from Nyaa don't, and never get the key.
+        if (regexEncoded.test(magnet)) return magnet.replace(regexEncoded, `tr=${encodedTr}`)
+        if (regexUnencoded.test(magnet)) return magnet.replace(regexUnencoded, `tr=${trUrl}`)
         return magnet
+    }
+
+    // nekoBT's magnet for an info hash, or "" when nekoBT doesn't have the torrent.
+    // Searching a 40 character info hash makes nekoBT look up that torrent directly.
+    private async findNekoMagnet(infoHash: string): Promise<string> {
+        const hash = infoHash.toLowerCase()
+        const res = await this.fetchJson<{ data?: { results?: NekoBTTorrent[], infohash_match?: string | null } }>(
+            `${API_URL}/torrents/search?query=${hash}&limit=5`,
+        )
+        const hit = (res?.data?.results ?? []).find(t => (t.infohash || "").toLowerCase() === hash)
+        if (hit?.magnet) return hit.magnet
+        const id = res?.data?.infohash_match
+        if (!id) return ""
+        const detail = await this.fetchJson<{ data?: { magnet?: string, infohash?: string } }>(`${API_URL}/torrents/${id}`)
+        return (detail?.data?.infohash || "").toLowerCase() === hash ? detail?.data?.magnet || "" : ""
     }
 
     //+ ----------------------------------------------------------------------------------------------
@@ -344,8 +354,13 @@ class Provider {
             freeText?: boolean
         },
     ): Promise<AnimeTorrent[]> {
-        let [nekoMedia, seaDex] = await Promise.all([this.getNekoMedia(media), this.getSeaDexBest(media.id)])
-        if (!nekoMedia) console.warn(`nekoBT: No nekoBT media found for AniList ID ${media.id}`)
+        // Simple search is a plain text search (like Nyaa): no nekoBT media lookup, Seanime parses episode numbers itself
+        const freeText = !!opts.freeText && (opts.query || "").trim().length > 0
+        let [nekoMedia, seaDex] = await Promise.all([
+            freeText ? Promise.resolve(null) : this.getNekoMedia(media),
+            this.getSeaDexBest(media.id),
+        ])
+        if (!nekoMedia && !freeText) console.warn(`nekoBT: No nekoBT media found for AniList ID ${media.id}`)
         const wantedEp = opts.episodeNumber && opts.episodeNumber > 0 ? opts.episodeNumber : undefined
 
         // Cached media info that doesn't know the requested episode (an airing show got new episode ids): refetch once.
@@ -445,7 +460,7 @@ class Provider {
                 // A missing sub level (null) ranks below every real level for "prefer fansubs"
                 this.levelByHash.set(hash, typeof t.level === "number" ? t.level : UNKNOWN_LEVEL)
                 episodesByHash.set(hash, (t.media_episode_ids || []).map(String))
-                results.push(this.toAnimeTorrent(t, nekoMedia))
+                results.push(this.toAnimeTorrent(t, nekoMedia, !freeText))
             }
 
             // Fallback mode has no episode mapping: select the episode from the torrent name instead
@@ -464,7 +479,7 @@ class Provider {
             const onNyaa = (tr: SeaDexTr) => !!tr.url && /^https:\/\/nyaa\.si\//.test(tr.url)
             const knownEp = opts.knownEpisode && opts.knownEpisode > 0 ? opts.knownEpisode : undefined
             // Batch mode without an episode number: best singles are only added when SeaDex has no best batch
-            const hasBestBatch = seaDex.some(tr => onNyaa(tr) && tr.isBest !== false && (tr.files ?? []).length !== 1)
+            const hasBestBatch = seaDex.some(tr => onNyaa(tr) && tr.isBest !== false && this.isSeaDexBatch(tr))
 
             const normallyShown = (tr: SeaDexTr, isBatch: boolean): boolean => {
                 if (opts.batch === true) return isBatch
@@ -489,7 +504,7 @@ class Provider {
             const wanted = seaDex.filter(tr => {
                 if (!onNyaa(tr)) return false
                 if (seen.has(tr.infoHash.toLowerCase())) return false
-                const isBatch = (tr.files ?? []).length !== 1
+                const isBatch = this.isSeaDexBatch(tr)
                 if (normallyShown(tr, isBatch)) return true
                 if (alwaysShownBest(tr, isBatch)) {
                     injected.add(tr.infoHash.toLowerCase())
@@ -627,7 +642,7 @@ class Provider {
         let mediaId = resolved.data.media_id
 
         const mediaMeta: { status?: number } = {}
-        let mediaRes = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${mediaId}`, 0, mediaMeta)
+        let mediaRes = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${mediaId}?force=true`, 0, mediaMeta)
         if (!mediaRes && mediaMeta.status === 404) {
             // resolve can point at a media that doesn't exist (seen with an AniList entry spread over two nekoBT media)
             const found = await this.discoverNekoMedia(anilistId, mediaId)
@@ -638,7 +653,7 @@ class Provider {
             }
         } else if (!mediaRes) {
             // Network error, rate limit, ...: use the AniList ID for this search, but don't remember the empty result
-            return this.buildNekoMedia({ fallback: false, mediaId, useExternalId: true, entries: [], episodes: [] })
+            return this.buildNekoMedia({ fallback: false, mediaId, entries: [], episodes: [] })
         }
         const allEpisodes = mediaRes?.data?.episodes ?? []
         // An AniList entry can have several mapping ranges (One Piece spans 24 seasons plus specials).
@@ -647,10 +662,9 @@ class Provider {
             .filter(e => e.anilist_id === anilistId && e.season !== null && e.season !== undefined)
             .map(e => ({ ...e, media: undefined })) // entry.media (titles, tags, ...) is large and not needed later
         const episodes = mapped.length > 0 ? allEpisodes.filter(e => mapped.some(en => this.inEntry(e, en))) : []
-        const useExternalId = mapped.length === 0 || episodes.length === 0
 
         const allEpisodeIds = allEpisodes.map(e => String(e.id))
-        const nekoMedia = this.buildNekoMedia({ fallback: false, mediaId, useExternalId, entries: mapped, episodes, allEpisodeIds })
+        const nekoMedia = this.buildNekoMedia({ fallback: false, mediaId, entries: mapped, episodes, allEpisodeIds })
         this.mediaCache.set(anilistId, nekoMedia)
         this.persistNekoMedia(anilistId, nekoMedia)
         return nekoMedia
@@ -665,7 +679,7 @@ class Provider {
             if (t.media_id && t.media_id !== skipId && ids.indexOf(t.media_id) === -1) ids.push(t.media_id)
         }
         for (const id of ids.slice(0, 3)) {
-            const res = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${id}`)
+            const res = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${id}?force=true`)
             const entries = res?.data?.anilist?.entries ?? []
             if (entries.some(e => e.anilist_id === anilistId)) return { id, res: res! }
         }
@@ -689,7 +703,6 @@ class Provider {
         const data: CachedNekoMedia = {
             fallback: nekoMedia.fallback,
             mediaId: nekoMedia.mediaId,
-            useExternalId: nekoMedia.useExternalId,
             entries: nekoMedia.entries,
             episodes: nekoMedia.episodes,
             allEpisodeIds: nekoMedia.allEpisodeIds,
@@ -788,7 +801,7 @@ class Provider {
                 checked.add(cand.id)
                 fetches++
 
-                const res = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${cand.id}`)
+                const res = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${cand.id}?force=true`)
                 const anilist = res?.data?.anilist
                 if (!anilist) continue
 
@@ -807,7 +820,6 @@ class Provider {
                 return {
                     fallback: true,
                     mediaId: cand.id,
-                    useExternalId: false,
                     entries: [],
                     episodes: orphans,
                     episodeNumberById: new Map<string, number>(),
@@ -818,18 +830,62 @@ class Provider {
     }
 
     //+ ----------------------------------------------------------------------------------------------
-    // Search query matching (Nyaa syntax), used for SeaDex releases
+    // Search query matching for SeaDex releases, modelled on Nyaa's search (search.py + es_mapping.yml)
     //   foo bar      both words
     //   foo|bar      either word
     //   -foo         without the word (also -"foo bar" and -(foo|bar))
-    //   "foo bar"    the exact phrase
+    //   "foo bar"    this exact text anywhere in the name, case-insensitive ("S01" also finds S01E01,
+    //                but "blue box" doesn't find Blue.Box, just like on Nyaa)
+    //   +foo, foo*   same as foo
     //   (foo bar)    grouping
+    // Plain words match the start of a word in the name, the way Nyaa indexes names: split on spaces and punctuation,
+    // and also into parts at case changes ("BluRay" -> blu, ray), "_" and "."; numbers also match without leading
+    // zeros ("53" finds 0053); "1920x1080" also gives 1920 and 1080.
     // Words that belong to the anime's own titles always count as matched, because every SeaDex release
     // is for this anime even when it is named differently ("ao no hako" vs "Blue Box").
     //+ ----------------------------------------------------------------------------------------------
 
-    private queryTokens(s: string): string[] {
-        return s.toLowerCase().replace(/['’`]/g, "").split(/[^0-9a-z\u00c0-\uffff]+/).filter(Boolean)
+    // Nyaa's character filter: "-" and "!" become "_", "_" becomes a space (one pass)
+    private nyaaCharFilter(s: string): string {
+        return s.replace(/[-!_]/g, c => (c === "_" ? " " : "_"))
+    }
+
+    // Approximation of Elasticsearch's standard tokenizer: words of letters/digits, joined by "_", "." or "'"
+    private nyaaStandardTokens(s: string): string[] {
+        return s.split(/[^0-9A-Za-z\u00c0-\uffff_.']+/).map(t => t.replace(/^[_.']+|[_.']+$/g, "")).filter(Boolean)
+    }
+
+    // The tokens Nyaa indexes for a name (before its prefix n-grams)
+    private nyaaIndexTokens(name: string): string[] {
+        const out = new Set<string>()
+        const add = (t: string) => {
+            const l = t.toLowerCase()
+            if (!l) return
+            out.add(l)
+            if (/^\d+$/.test(l)) out.add(l.replace(/^0+(?=\d)/, ""))
+        }
+        for (const tok of this.nyaaStandardTokens(this.nyaaCharFilter(name))) {
+            add(tok)
+            const res = tok.match(/(\d+)[xX](\d+)/)
+            if (res) {
+                add(res[1])
+                add(res[2])
+            }
+            for (const part of tok.split(/[_.']+/)) {
+                add(part)
+                for (const sub of part.replace(/([a-z])([A-Z])/g, "$1 $2").split(" ")) add(sub)
+            }
+        }
+        return [...out]
+    }
+
+    private nyaaQueryTokens(word: string): string[] {
+        return this.nyaaStandardTokens(this.nyaaCharFilter(word.replace(/\*+$/, ""))).map(t => t.toLowerCase())
+    }
+
+    // Nyaa indexes prefixes of up to 15 characters; longer words must match whole
+    private nyaaWordMatches(q: string, indexTokens: string[]): boolean {
+        return indexTokens.some(t => (q.length <= 15 ? t.indexOf(q) === 0 : t === q))
     }
 
     private tokenizeQuery(q: string): QueryToken[] {
@@ -848,6 +904,9 @@ class Provider {
                 i++
             } else if (c === "-" && i + 1 < q.length && !/\s/.test(q[i + 1])) {
                 out.push({ type: "-", value: c })
+                i++
+            } else if (c === "+") {
+                // "+" is AND, which is already the default between terms
                 i++
             } else {
                 let j = i
@@ -875,7 +934,8 @@ class Provider {
                 return n
             }
             if (tk.type === ")" || tk.type === "|") return null
-            return { kind: "term", tokens: this.queryTokens(tk.value) }
+            const quoted = tk.type === "phrase"
+            return { kind: "term", text: tk.value.toLowerCase(), tokens: quoted ? [] : this.nyaaQueryTokens(tk.value), quoted }
         }
         const parseOr = (): QueryNode | null => {
             const items: QueryNode[] = []
@@ -919,21 +979,23 @@ class Provider {
 
         const titles = [media.romajiTitle, media.englishTitle, ...(media.synonyms || [])]
             .filter((t): t is string => !!t)
-            .map(t => this.queryTokens(t).join(" "))
-        const titleWords = new Set(titles.join(" ").split(" ").filter(Boolean))
+        const titleRaw = titles.map(t => t.toLowerCase())
+        const titleTokens = this.nyaaIndexTokens(titles.join(" "))
 
         return (name: string) => {
-            const hay = " " + this.queryTokens(name).join(" ") + " "
+            const raw = name.toLowerCase()
+            const tokens = this.nyaaIndexTokens(name)
             const evalNode = (n: QueryNode, allowTitle: boolean): boolean => {
                 switch (n.kind) {
                     case "term": {
+                        if (n.quoted) {
+                            if (!n.text) return true
+                            if (raw.indexOf(n.text) !== -1) return true
+                            return allowTitle && titleRaw.some(t => t.indexOf(n.text) !== -1)
+                        }
                         if (n.tokens.length === 0) return true
-                        const phrase = n.tokens.join(" ")
-                        if (hay.indexOf(" " + phrase + " ") !== -1) return true
-                        if (!allowTitle) return false
-                        return n.tokens.length === 1
-                            ? titleWords.has(phrase)
-                            : titles.some(t => (" " + t + " ").indexOf(" " + phrase + " ") !== -1)
+                        // Every token of the word has to match, in the name or (not when negated) in the anime's titles
+                        return n.tokens.every(q => this.nyaaWordMatches(q, tokens) || (allowTitle && this.nyaaWordMatches(q, titleTokens)))
                     }
                     case "and":
                         return n.items.every(i => evalNode(i, allowTitle))
@@ -953,35 +1015,47 @@ class Provider {
         const out = new Set<number>()
         for (const f of files) {
             if (!VIDEO_FILE.test(f.name)) continue
-            const n = this.fileEpisode(f.name, nekoMedia, media)
-            if (n > 0) out.add(n)
+            for (const n of this.fileEpisodes(f.name, nekoMedia, media)) out.add(n)
         }
         return out
     }
 
-    // AniList episode number of one file, or -1 if unknown.
-    // 1. "S10E01 (0337)": the bracketed number is the absolute episode, if it fits the AniList entry
-    // 2. "S01E04": converted through nekoBT's season mapping for this AniList entry
-    // 3. anything else ("Title - 0053"): parsed by habari
-    private fileEpisode(name: string, nekoMedia: NekoMediaInfo | null, media: Media): number {
+    // AniList episode numbers of one file (several for "0487+0490"), empty if unknown. Uses habari:
+    // 1. Its alternate number: "S10E01 (0337)" -> 337, the absolute episode, if it fits the AniList entry
+    // 2. Season + episode: "S01E04" converted through nekoBT's season mapping for this AniList entry
+    // 3. The plain episode number: "Title - 0053" -> 53
+    private fileEpisodes(name: string, nekoMedia: NekoMediaInfo | null, media: Media): number[] {
+        let h: any = null
+        try {
+            h = $habari.parse(name)
+        } catch (e) {
+            return []
+        }
+        const nums = (v: unknown): number[] => (Array.isArray(v) ? v : v === undefined || v === null || v === "" ? [] : [v])
+            .map(x => parseInt(String(x), 10))
+            .filter(n => !isNaN(n) && n > 0)
         const max = media.episodeCount && media.episodeCount > 0 ? media.episodeCount : Number.MAX_SAFE_INTEGER
-        const abs = name.match(/S\d{1,2}E\d{1,4}\s*[(\[](\d{1,4})[)\]]/i)
-        if (abs) {
-            const n = parseInt(abs[1], 10)
-            if (n >= 1 && n <= max) return n
-        }
-        const se = name.match(/S(\d{1,2})E(\d{1,4})/i)
-        if (se) {
-            const season = parseInt(se[1], 10)
-            const ep = parseInt(se[2], 10)
+
+        // habari's "Episode Alt". The docs don't name this field, so look for it rather than guess one spelling.
+        const altKey = h ? Object.keys(h).find(k => /episode/i.test(k) && /alt/i.test(k)) : undefined
+        const alt = nums(altKey ? h[altKey] : undefined)
+        if (alt.length > 0 && alt.every(n => n <= max)) return alt
+
+        const eps = nums(h?.episode_number)
+        const seasons = nums(h?.season_number)
+        if (eps.length > 0 && seasons.length === 1) {
+            const season = seasons[0]
             if (nekoMedia && !nekoMedia.fallback) {
-                const probe: NekoBTEpisode = { id: 0, season, episode: ep }
-                const entry = nekoMedia.entries.find(en => !en.ratio && this.inEntry(probe, en))
-                if (entry) return entry.dst_start + (ep - entry.src_start)
+                const mapped = eps.map(ep => {
+                    const entry = nekoMedia.entries.find(en => !en.ratio && this.inEntry({ id: 0, season, episode: ep }, en))
+                    return entry ? entry.dst_start + (ep - entry.src_start) : -1
+                })
+                if (mapped.every(n => n > 0)) return mapped
             }
-            return season === 1 ? ep : -1
+            // Without a mapping only season 1 numbers can be trusted as AniList numbers
+            return season === 1 ? eps : []
         }
-        return this.parseEpisodeFromName(name)
+        return eps
     }
 
     private parseEpisodeFromName(title: string): number {
@@ -1007,6 +1081,13 @@ class Provider {
     //+ ----------------------------------------------------------------------------------------------
     // SeaDex (releases.moe) best releases
     //+ ----------------------------------------------------------------------------------------------
+
+    // A release with one video file is a single episode, even if it also ships a cover image or subtitles
+    private isSeaDexBatch(tr: SeaDexTr): boolean {
+        const files = tr.files ?? []
+        const videos = files.filter(f => VIDEO_FILE.test(f.name)).length
+        return videos > 0 ? videos !== 1 : files.length !== 1
+    }
 
     // Every SeaDex release (best and alternative) with a usable info hash
     private async getSeaDexBest(anilistId: number): Promise<SeaDexTr[]> {
@@ -1153,11 +1234,13 @@ class Provider {
     private async getSeaDexTorrent(tr: SeaDexTr, media: Media, nekoMedia: NekoMediaInfo | null, scrape: boolean): Promise<AnimeTorrent> {
         const hash = tr.infoHash.toLowerCase()
         const files = tr.files ?? []
-        const single = files.length === 1
+        const single = !this.isSeaDexBatch(tr)
+        const videos = files.filter(f => VIDEO_FILE.test(f.name))
+        const mainFile = videos.length === 1 ? videos[0] : files[0]
         const size = files.reduce((sum, f) => sum + (f.length || 0), 0)
         const title = media.romajiTitle || media.englishTitle || "Unknown Title"
         let name = single
-            ? files[0].name.replace(/\.[a-z0-9]{2,4}$/i, "")
+            ? mainFile.name.replace(/\.[a-z0-9]{2,4}$/i, "")
             : `[${tr.releaseGroup || "SeaDex"}] ${title}${tr.dualAudio ? " [Dual-Audio]" : ""}`
         let seeders = -1
         let leechers = 0
@@ -1184,9 +1267,10 @@ class Provider {
                         const valueEl = el.next()
                         if (!valueEl) return
                         const value = valueEl.text().trim()
-                        if (label === "Seeders:") seeders = parseInt(value) || -1
-                        else if (label === "Leechers:") leechers = parseInt(value) || 0
-                        else if (label === "Downloads:") downloads = parseInt(value) || 0
+                        const n = parseInt(value, 10)
+                        if (label === "Seeders:") seeders = isNaN(n) ? -1 : n
+                        else if (label === "Leechers:") leechers = isNaN(n) ? 0 : n
+                        else if (label === "Downloads:") downloads = isNaN(n) ? 0 : n
                         else if (label === "File size:") formattedSize = value
                     })
                     // Kept until Seanime restarts: the page belongs to an immutable info hash
@@ -1197,8 +1281,8 @@ class Provider {
             }
         }
 
-        name = `${tr.isBest !== false ? "[BEST]" : "[ALT]"} ${name}`
         let magnet = `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(name)}`
+        name = `${tr.isBest !== false ? "[BEST]" : "[ALT]"} ${name}`
         for (const t of NYAA_TRACKERS) magnet += `&tr=${encodeURIComponent(t)}`
 
         const created = tr.created ? new Date(tr.created.replace(" ", "T")) : new Date()
@@ -1206,7 +1290,7 @@ class Provider {
             name,
             date: isNaN(created.getTime()) ? new Date().toISOString() : created.toISOString(),
             size,
-            formattedSize: formattedSize || this.formatBytes(size),
+            formattedSize, // empty lets Seanime format the size
             seeders,
             leechers,
             downloadCount: downloads,
@@ -1214,9 +1298,9 @@ class Provider {
             downloadUrl: "",
             magnetLink: magnet,
             infoHash: hash,
-            resolution: this.detectResolution(name) || this.detectResolution(files[0]?.name || ""),
+            resolution: this.detectResolution(name) || this.detectResolution(mainFile?.name || ""),
             isBatch: !single,
-            episodeNumber: single ? this.fileEpisode(files[0].name, nekoMedia, media) : -1,
+            episodeNumber: single && mainFile ? (this.fileEpisodes(mainFile.name, nekoMedia, media)[0] ?? -1) : -1,
             releaseGroup: tr.releaseGroup || "",
             isBestRelease: true,
             confirmed: true,
@@ -1246,15 +1330,11 @@ class Provider {
         if (wh) return this.bucketByWidth(parseInt(wh[1], 10))
         try {
             const habari = $habari.parse(text) as any
-            if (habari && habari.video_resolution) {
-                const r = String(habari.video_resolution)
-                if (r !== text) {
-                    const again = r.toLowerCase().match(/(\d{3,4})p/)
-                    if (again) return again[1] + "p"
-                    const wh2 = r.toLowerCase().match(/(\d{3,4})\s*x\s*(\d{3,4})/)
-                    if (wh2) return this.bucketByWidth(parseInt(wh2[1], 10))
-                }
-            }
+            const r = String(habari?.video_resolution || "").toLowerCase()
+            const again = r.match(/(\d{3,4})p/)
+            if (again) return again[1] + "p"
+            const wh2 = r.match(/(\d{3,4})\s*x\s*(\d{3,4})/)
+            if (wh2) return this.bucketByWidth(parseInt(wh2[1], 10))
         } catch (e) {
         }
         return ""
@@ -1296,7 +1376,8 @@ class Provider {
         const kept: AnimeTorrent[] = []
         for (const r of results) {
             let res = r.resolution || ""
-            if (!res && lookups < 15) {
+            const lookupable = !!r.infoHash && this.nekoIdByHash.has(r.infoHash)
+            if (!res && lookupable && lookups < 15) {
                 lookups++
                 res = await this.lookupResolution(r)
                 if (res) r.resolution = res
@@ -1458,7 +1539,8 @@ class Provider {
         return isNaN(n) ? 0 : n
     }
 
-    private toAnimeTorrent(t: NekoBTTorrent, nekoMedia: NekoMediaInfo | null): AnimeTorrent {
+    // `scoped`: the search was limited to this anime, so every result belongs to it
+    private toAnimeTorrent(t: NekoBTTorrent, nekoMedia: NekoMediaInfo | null, scoped: boolean = false): AnimeTorrent {
         const ts = this.toNumber(t.uploaded_at)
         const date = ts > 0 ? new Date(ts).toISOString() : new Date().toISOString()
 
@@ -1467,7 +1549,7 @@ class Provider {
 
         // Episode info comes straight from the API's episode ids rather than title guessing
         const ids = (t.media_episode_ids || []).map(String)
-        let isBatch = !!t.batch || ids.length > 1
+        const isBatch = !!t.batch || ids.length > 1
         let episodeNumber = -1
         if (nekoMedia && !isBatch && ids.length === 1) {
             const n = nekoMedia.episodeNumberById.get(ids[0])
@@ -1481,7 +1563,7 @@ class Provider {
             name: title,
             date,
             size,
-            formattedSize: this.formatBytes(size),
+            formattedSize: "", // Seanime formats the size
             seeders: this.toNumber(t.seeders),
             leechers: this.toNumber(t.leechers),
             downloadCount: this.toNumber(t.completed),
@@ -1495,15 +1577,8 @@ class Provider {
             // Only the primary (uploading) group counts; secondary contributors must not be shown as the release group
             releaseGroup: (Array.isArray(t.groups) ? t.groups.find(g => g.uploading_group) : undefined)?.display_name ?? "",
             isBestRelease: false, // set from SeaDex only
-            confirmed: nekoMedia !== null && !nekoMedia.fallback,
+            confirmed: !!nekoMedia && !nekoMedia.fallback
+                && (scoped || ids.some(id => nekoMedia.episodeNumberById.has(id))),
         }
-    }
-
-    private formatBytes(bytes: number, decimals: number = 2): string {
-        if (!bytes || bytes <= 0) return "0 Bytes"
-        const k = 1024
-        const sizes = ["Bytes", "KB", "MB", "GB", "TB"]
-        const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1)
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + " " + sizes[i]
     }
 }
