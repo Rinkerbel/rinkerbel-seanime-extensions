@@ -218,23 +218,6 @@ const VIDEO_TYPES: Record<string, number> = {
     "dvd-disc": 16,
 }
 
-// [ISO 639-1, ISO 639-2/T, English name]
-const LANGUAGES: [string, string, string][] = [
-    ["en", "eng", "English"], ["ja", "jpn", "Japanese"], ["es", "spa", "Spanish"], ["pt", "por", "Portuguese"],
-    ["fr", "fra", "French"], ["de", "deu", "German"], ["it", "ita", "Italian"], ["ru", "rus", "Russian"],
-    ["ar", "ara", "Arabic"], ["zh", "zho", "Chinese"], ["ko", "kor", "Korean"], ["id", "ind", "Indonesian"],
-    ["ms", "msa", "Malay"], ["pl", "pol", "Polish"], ["th", "tha", "Thai"], ["tr", "tur", "Turkish"],
-    ["vi", "vie", "Vietnamese"], ["ta", "tam", "Tamil"], ["te", "tel", "Telugu"], ["hi", "hin", "Hindi"],
-    ["nl", "nld", "Dutch"], ["sv", "swe", "Swedish"], ["no", "nor", "Norwegian"], ["da", "dan", "Danish"],
-    ["fi", "fin", "Finnish"], ["cs", "ces", "Czech"], ["hu", "hun", "Hungarian"], ["ro", "ron", "Romanian"],
-    ["bg", "bul", "Bulgarian"], ["uk", "ukr", "Ukrainian"], ["el", "ell", "Greek"], ["he", "heb", "Hebrew"],
-    ["fa", "fas", "Persian"], ["bn", "ben", "Bengali"], ["ur", "urd", "Urdu"], ["tl", "fil", "Filipino"],
-    ["ca", "cat", "Catalan"], ["hr", "hrv", "Croatian"], ["sr", "srp", "Serbian"], ["sk", "slk", "Slovak"],
-    ["sl", "slv", "Slovenian"], ["lt", "lit", "Lithuanian"], ["lv", "lav", "Latvian"], ["et", "est", "Estonian"],
-    ["ml", "mal", "Malayalam"], ["mr", "mar", "Marathi"], ["kn", "kan", "Kannada"], ["my", "mya", "Burmese"],
-    ["km", "khm", "Khmer"], ["la", "lat", "Latin"],
-]
-
 const NYAA_TRACKERS = [
     "http://nyaa.tracker.wf:7777/announce",
     "udp://open.stealth.si:80/announce",
@@ -1294,22 +1277,14 @@ class Provider {
         return kept
     }
 
-    //+ ----------------------------------------------------------------------------------------------
-    // Subtitle languages in the torrent name
-    //+ ----------------------------------------------------------------------------------------------
-
+    // "Append subtitle languages": nekoBT's own codes for official and fansub subtitles, e.g. " (en, enm, es-419)"
     private formatSubtitleLangs(t: NekoBTTorrent): string {
         if (this.getPref("subtitleLangs").toLowerCase() !== "true") return ""
-
-        const codes = [...this.splitList(t.sub_lang || ""), ...this.splitList(t.fsub_lang || "")]
-        const out: string[] = []
-        for (const code of codes) {
-            const base = code === "enm" ? "en" : code.split("-")[0]
-            const lang = LANGUAGES.find(l => l[0] === base || l[1] === base)
-            const label = lang ? lang[2] : base
-            if (out.indexOf(label) === -1) out.push(label)
+        const codes: string[] = []
+        for (const code of [...this.splitList(t.sub_lang || ""), ...this.splitList(t.fsub_lang || "")]) {
+            if (codes.indexOf(code) === -1) codes.push(code)
         }
-        return out.length > 0 ? ` (${out.join(", ")})` : ""
+        return codes.length > 0 ? ` (${codes.join(", ")})` : ""
     }
 
     //+ ----------------------------------------------------------------------------------------------
