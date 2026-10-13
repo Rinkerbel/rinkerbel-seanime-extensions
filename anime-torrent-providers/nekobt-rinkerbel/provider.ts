@@ -280,6 +280,7 @@ class Provider {
                 query: opts.query,
                 batch: !!opts.batch,
                 episodeNumber: opts.batch ? undefined : opts.episodeNumber,
+                knownEpisode: opts.episodeNumber,
                 resolution: opts.resolution,
             })
         } catch (error) {
@@ -337,6 +338,8 @@ class Provider {
             query?: string
             batch?: boolean
             episodeNumber?: number
+            // The episode Seanime has selected, also in batch mode (used to always show SeaDex best releases)
+            knownEpisode?: number
             resolution?: string
         },
     ): Promise<AnimeTorrent[]> {
@@ -347,8 +350,8 @@ class Provider {
         const first = await this.collect(media, nekoMedia, seaDex, opts, wantedEp, false)
 
         // Batches off and no single-episode release anywhere (nekoBT or SeaDex): include batches from both.
-        // The first pass contains no batches, so any result means a single episode was found.
-        if (first.torrents.length === 0 && opts.batch !== true && wantedEp !== undefined) {
+        // SeaDex best releases added regardless of the toggle don't count, so they never block this.
+        if (first.regularCount === 0 && opts.batch !== true && wantedEp !== undefined) {
             return (await this.collect(media, nekoMedia, seaDex, opts, wantedEp, true)).torrents
         }
         return first.torrents
@@ -358,11 +361,13 @@ class Provider {
         media: Media,
         nekoMedia: NekoMediaInfo | null,
         seaDex: SeaDexTr[],
-        opts: { query?: string, batch?: boolean, resolution?: string },
+        opts: { query?: string, batch?: boolean, resolution?: string, knownEpisode?: number },
         wantedEp: number | undefined,
         includeBatches: boolean,
-    ): Promise<{ torrents: AnimeTorrent[] }> {
+    ): Promise<{ torrents: AnimeTorrent[], regularCount: number }> {
         const results: AnimeTorrent[] = []
+        // SeaDex best releases shown even though they don't match the Batches toggle
+        const injected = new Set<string>()
         const seen = new Set<string>()
         // nekoBT episode ids per info hash, for the per-episode fansub preference
         const episodesByHash = new Map<string, string[]>()
@@ -422,21 +427,41 @@ class Provider {
 
         // ---- SeaDex releases nekoBT doesn't have (Nyaa only). Filtered by batch/episode BEFORE any Nyaa page is scraped.
         if (pull) {
-            const wanted = seaDex.filter(tr => {
-                if (!tr.url || !/^https:\/\/nyaa\.si\//.test(tr.url)) return false
-                if (seen.has(tr.infoHash.toLowerCase())) return false
-                const files = tr.files ?? []
-                const isBatch = files.length !== 1
+            const onNyaa = (tr: SeaDexTr) => !!tr.url && /^https:\/\/nyaa\.si\//.test(tr.url)
+            const knownEp = opts.knownEpisode && opts.knownEpisode > 0 ? opts.knownEpisode : undefined
+            // Batch mode without an episode number: best singles are only added when SeaDex has no best batch
+            const hasBestBatch = seaDex.some(tr => onNyaa(tr) && tr.isBest !== false && (tr.files ?? []).length !== 1)
+
+            const normallyShown = (tr: SeaDexTr, isBatch: boolean): boolean => {
                 if (opts.batch === true) return isBatch
                 if (wantedEp !== undefined) {
                     // Batches off: SeaDex batches only appear in the batch fallback, like nekoBT batches
                     if (isBatch && !includeBatches) return false
                     // The release must contain the episode. Releases whose files carry no recognisable
                     // episode numbers are kept.
-                    const eps = this.releaseEpisodes(files, nekoMedia, media)
+                    const eps = this.releaseEpisodes(tr.files ?? [], nekoMedia, media)
                     return eps.size === 0 || eps.has(wantedEp)
                 }
                 return true
+            }
+
+            // A SeaDex best release that contains the selected episode is always shown, whatever the Batches toggle says
+            const alwaysShownBest = (tr: SeaDexTr, isBatch: boolean): boolean => {
+                if (tr.isBest === false) return false
+                if (knownEp !== undefined) return this.releaseEpisodes(tr.files ?? [], nekoMedia, media).has(knownEp)
+                return opts.batch === true && !isBatch && !hasBestBatch
+            }
+
+            const wanted = seaDex.filter(tr => {
+                if (!onNyaa(tr)) return false
+                if (seen.has(tr.infoHash.toLowerCase())) return false
+                const isBatch = (tr.files ?? []).length !== 1
+                if (normallyShown(tr, isBatch)) return true
+                if (alwaysShownBest(tr, isBatch)) {
+                    injected.add(tr.infoHash.toLowerCase())
+                    return true
+                }
+                return false
             })
             // One Nyaa RSS request per SeaDex search link covers many releases; only what's left is scraped
             await this.prefetchNyaaDetails(wanted)
@@ -461,7 +486,8 @@ class Provider {
 
         const filtered = await this.filterByResolution(results, opts.resolution)
         const torrents = this.applyFansubPreference(filtered, episodesByHash)
-        return { torrents }
+        const regularCount = torrents.filter(t => !t.infoHash || !injected.has(t.infoHash)).length
+        return { torrents, regularCount }
     }
 
     // "Prefer fansubs", decided per episode: for every episode, only torrents with the highest sub level available
