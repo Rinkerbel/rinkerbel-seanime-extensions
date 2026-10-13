@@ -1582,6 +1582,9 @@ class Provider {
             if (n !== undefined) episodeNumber = n
         }
         if (nekoMedia && nekoMedia.fallback && !isBatch) episodeNumber = this.parseEpisodeFromName(t.title || "")
+        // No mapping (simple search, unmapped anime): parse the name like Seanime would. Seanime's torrent list keeps
+        // a -1 as is instead of parsing it, so a single episode left at -1 would never get its episode thumbnail.
+        if (episodeNumber === -1 && !isBatch) episodeNumber = this.parseEpisodeFromName(t.title || "")
 
         const size = this.toNumber(t.filesize)
 
