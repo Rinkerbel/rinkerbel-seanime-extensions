@@ -55,7 +55,7 @@ Every filter is optional. Leave a field empty to disable it. Lists are comma sep
 | [OTL (Original Translation)](https://wiki.nekobt.to/info/metadata/#otl-original-translation) | All / Only / Exclude | Fansub groups that translated everything themselves instead of editing an existing script |
 | [MTL (Machine Translation)](https://wiki.nekobt.to/info/metadata/#mtl-machine-translation) | All / Only / Exclude | Includes fully machine translated and edited machine translations |
 
-Unknown values in a list are ignored. <br>
+Unknown values in a list are ignored.  
 Click the filter settings to be send to relevant nekoBT docs for further learning.
 
 ## How it works
