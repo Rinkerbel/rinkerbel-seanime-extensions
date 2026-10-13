@@ -68,6 +68,12 @@ interface NekoBTAnilistEntry {
     anilist_id: number
 }
 
+interface NekoBTAnilistInfo {
+    entries?: NekoBTAnilistEntry[]
+    relations?: NekoBTRelation[]
+    primary?: { relations?: NekoBTRelation[] }
+}
+
 interface NekoBTMediaResponse {
     error: boolean
     message?: string
@@ -91,7 +97,8 @@ interface NekoBTResolveResponse {
 
 interface NekoBTMediaSearchResponse {
     error: boolean
-    data?: { results?: { id: string }[] }
+    // `anilist` is null when nekoBT has no AniList mapping for the series, else the same object as on /media/<id>
+    data?: { results?: { id: string, similarity?: number, year?: number, anilist?: NekoBTAnilistInfo | null }[] }
 }
 
 interface NekoMediaInfo {
@@ -107,6 +114,8 @@ interface NekoMediaInfo {
     allEpisodeIds?: string[]
     // true when this came from $store instead of a fresh fetch
     fromCache?: boolean
+    // nekoBT has the series but no AniList mapping: search by the nekoBT media id instead of the AniList ID
+    byMediaId?: boolean
     // nekoBT episode id -> AniList episode number
     episodeNumberById: Map<string, number>
 }
@@ -119,6 +128,7 @@ interface CachedNekoMedia {
     entries: NekoBTAnilistEntry[]
     episodes: NekoBTEpisode[]
     allEpisodeIds?: string[]
+    byMediaId?: boolean
 }
 
 interface SeaDexTr {
@@ -177,6 +187,8 @@ const MEDIA_TTL_MS = 24 * 60 * 60 * 1000
 const MISSING_TTL_MS = 30 * 60 * 1000
 // Sub level used for torrents nekoBT has no level for (lower than -1 = "no subs")
 const UNKNOWN_LEVEL = -2
+// nekoBT media search similarity (0-1) needed to accept a series nekoBT hasn't mapped to AniList
+const UNMAPPED_MIN_SIMILARITY = 0.9
 const VIDEO_FILE = /\.(mkv|mp4|avi|m2ts|ts|webm|mov|wmv|flv|ogm)$/i
 
 // Rate limits: retry once if the server asks us to wait no longer than this
@@ -427,7 +439,7 @@ class Provider {
                 } else {
                     // nekoBT narrows the AniList ID to this entry's episodes itself, also across several seasons
                     // or several nekoBT media. A single episode still needs its nekoBT episode id.
-                    params.push(`media_id=anilist-${media.id}`)
+                    params.push(`media_id=${nekoMedia.byMediaId ? nekoMedia.mediaId : `anilist-${media.id}`}`)
                     const single = wantedEp !== undefined && !opts.batch ? this.findEpisode(nekoMedia, wantedEp) : null
                     if (single) {
                         params.push(`episode_ids=${single.id}`)
@@ -534,7 +546,6 @@ class Provider {
         for (const r of results) {
             if (!r.infoHash || !isBestByHash.has(r.infoHash)) continue
             r.isBestRelease = true
-            r.link = `https://releases.moe/${media.id}/`
             if (pull && r.name.indexOf("[BEST] ") !== 0 && r.name.indexOf("[ALT] ") !== 0) {
                 r.name = `${isBestByHash.get(r.infoHash) ? "[BEST]" : "[ALT]"} ${r.name}`
             }
@@ -710,6 +721,7 @@ class Provider {
             entries: nekoMedia.entries,
             episodes: nekoMedia.episodes,
             allEpisodeIds: nekoMedia.allEpisodeIds,
+            byMediaId: nekoMedia.byMediaId,
         }
         this.cacheSet(`nekobt:media:${anilistId}`, data, MEDIA_TTL_MS)
     }
@@ -801,14 +813,28 @@ class Provider {
             )
             for (const cand of (search?.data?.results ?? []).slice(0, 3)) {
                 if (checked.has(cand.id)) continue
-                if (fetches >= 8) return null // keep request count (rate limits) bounded
                 checked.add(cand.id)
-                fetches++
+                if (fetches >= 8) return null // keep request count (rate limits) bounded
 
-                const res = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${cand.id}?force=true`)
-                const anilist = res?.data?.anilist
-                if (!anilist) continue
+                // nekoBT has the series, but without any AniList mapping (so resolve can't find it):
+                // accept a (near) exact title match from about the same year
+                const year = media.startDate?.year
+                const sameYear = !year || !cand.year || Math.abs(cand.year - year) <= 1
+                if (!cand.anilist) {
+                    if ((cand.similarity ?? 0) < UNMAPPED_MIN_SIMILARITY || !sameYear) continue
+                    fetches++
+                    const res = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${cand.id}?force=true`)
+                    const unmapped = res ? this.unmappedNekoMedia(cand.id, res, media) : null
+                    if (unmapped) {
+                        console.log(`nekoBT: AniList ${media.id} isn't mapped on nekoBT, using ${cand.id} (title match "${q}")`)
+                        return unmapped
+                    }
+                    continue
+                }
 
+                // Mapped series: the search result already carries its AniList relations, so a series is
+                // only fetched once it lists our AniList entry as related
+                const anilist = cand.anilist
                 const relations: NekoBTRelation[] = [
                     ...(anilist.relations ?? []),
                     ...(anilist.primary?.relations ?? []),
@@ -816,8 +842,11 @@ class Provider {
                 ]
                 if (!relations.some(r => r.id === media.id)) continue
 
-                const entries = anilist.entries ?? []
-                const orphans = (res?.data?.episodes ?? []).filter(e => !entries.some(en => this.inEntry(e, en)))
+                fetches++
+                const res = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${cand.id}?force=true`)
+                if (!res) continue
+                const entries = res.data?.anilist?.entries ?? anilist.entries ?? []
+                const orphans = (res.data?.episodes ?? []).filter(e => !entries.some(en => this.inEntry(e, en)))
                 if (orphans.length === 0) continue
 
                 console.log(`nekoBT: AniList ${media.id} not mapped, using unmapped episodes of ${cand.id}`)
@@ -1060,6 +1089,23 @@ class Provider {
             return season === 1 ? eps : []
         }
         return eps
+    }
+
+    // A nekoBT series without AniList mapping. With one regular season, its episodes map 1:1 to the AniList
+    // entry, so single-episode searches still work. With several seasons we can't tell which one this AniList
+    // entry is, so the whole series is searched and episode numbers come from the torrent names.
+    private unmappedNekoMedia(mediaId: string, res: NekoBTMediaResponse, media: Media): NekoMediaInfo | null {
+        const all = res.data?.episodes ?? []
+        const seasons = [...new Set(all.filter(e => e.season > 0).map(e => e.season))]
+        const allEpisodeIds = all.map(e => String(e.id))
+        if (seasons.length === 1) {
+            const entry: NekoBTAnilistEntry = {
+                season: seasons[0], src_start: 1, src_end: null, dst_start: 1, dst_end: null, ratio: null, anilist_id: media.id,
+            }
+            const episodes = all.filter(e => this.inEntry(e, entry))
+            return { ...this.buildNekoMedia({ fallback: false, mediaId, entries: [entry], episodes, allEpisodeIds }), byMediaId: true }
+        }
+        return { fallback: true, mediaId, entries: [], episodes: [], allEpisodeIds, episodeNumberById: new Map<string, number>() }
     }
 
     private parseEpisodeFromName(title: string): number {
@@ -1320,7 +1366,7 @@ class Provider {
             seeders,
             leechers,
             downloadCount: downloads,
-            link: `https://releases.moe/${media.id}/`,
+            link: tr.url as string, // the release's Nyaa page
             downloadUrl: "",
             magnetLink: magnet,
             infoHash: hash,
