@@ -135,6 +135,8 @@ interface SeaDexTr {
 // Details scraped from a Nyaa page. Keyed by info hash, so they never go stale (only seeders drift).
 interface NyaaDetails {
     name: string
+    // Nyaa upload time (ISO). Missing in entries cached by older versions.
+    date?: string
     seeders: number
     leechers: number
     downloads: number
@@ -1205,12 +1207,23 @@ class Provider {
                     leechers: Math.max(0, num(get("nyaa:leechers"))),
                     downloads: Math.max(0, num(get("nyaa:downloads"))),
                     formattedSize: get("nyaa:size"),
+                    date: this.parseRssDate(get("pubDate")),
                 })
             }
         } catch (e) {
             console.warn("nekoBT: Nyaa RSS failed: " + (e as Error).message)
         }
         return items
+    }
+
+    // "Mon, 05 Oct 2026 15:40:52 -0000" -> ISO, or undefined. Parsed by hand, the engine's Date parsing of this format isn't guaranteed.
+    private parseRssDate(s: string): string | undefined {
+        const m = s.match(/(\d{1,2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2})(?: ([+-])(\d{2})(\d{2}))?/)
+        if (!m) return undefined
+        const month = "JanFebMarAprMayJunJulAugSepOctNovDec".indexOf(m[2]) / 3
+        let ms = Date.UTC(parseInt(m[3], 10), month, parseInt(m[1], 10), parseInt(m[4], 10), parseInt(m[5], 10), parseInt(m[6], 10))
+        if (m[7]) ms -= (m[7] === "-" ? -1 : 1) * (parseInt(m[8], 10) * 60 + parseInt(m[9], 10)) * 60000
+        return isNaN(ms) ? undefined : new Date(ms).toISOString()
     }
 
     private decodeXml(s: string): string {
@@ -1252,6 +1265,7 @@ class Provider {
         let leechers = 0
         let downloads = 0
         let formattedSize = ""
+        let uploaded: string | undefined
 
         const detailsKey = `nekobt:nyaa:${hash}`
         const details = this.cacheGet<NyaaDetails>(detailsKey)
@@ -1261,6 +1275,7 @@ class Provider {
             leechers = details.leechers
             downloads = details.downloads
             formattedSize = details.formattedSize
+            uploaded = details.date
         } else if (scrape) {
             try {
                 const res = await fetch(tr.url as string, { timeout: 5000 })
@@ -1278,9 +1293,13 @@ class Provider {
                         else if (label === "Leechers:") leechers = isNaN(n) ? 0 : n
                         else if (label === "Downloads:") downloads = isNaN(n) ? 0 : n
                         else if (label === "File size:") formattedSize = value
+                        else if (label === "Date:") {
+                            const ts = parseInt(String(valueEl.attr("data-timestamp") || ""), 10)
+                            if (!isNaN(ts) && ts > 0) uploaded = new Date(ts * 1000).toISOString()
+                        }
                     })
                     // Kept until Seanime restarts: the page belongs to an immutable info hash
-                    this.cacheSet(detailsKey, { name: pageTitle || "", seeders, leechers, downloads, formattedSize }, null)
+                    this.cacheSet(detailsKey, { name: pageTitle || "", seeders, leechers, downloads, formattedSize, date: uploaded }, null)
                 }
             } catch (e) {
                 console.warn("nekoBT: Failed to scrape Nyaa page for SeaDex release: " + (e as Error).message)
@@ -1291,7 +1310,8 @@ class Provider {
         name = `${tr.isBest !== false ? "[BEST]" : "[ALT]"} ${name}`
         for (const t of NYAA_TRACKERS) magnet += `&tr=${encodeURIComponent(t)}`
 
-        const created = tr.created ? new Date(tr.created.replace(" ", "T")) : new Date()
+        // Nyaa's upload time. SeaDex's `created` is only when the release was added to SeaDex, the last resort.
+        const created = new Date(uploaded || (tr.created ? tr.created.replace(" ", "T") : Date.now()))
         const torrent: AnimeTorrent = {
             name,
             date: isNaN(created.getTime()) ? new Date().toISOString() : created.toISOString(),
