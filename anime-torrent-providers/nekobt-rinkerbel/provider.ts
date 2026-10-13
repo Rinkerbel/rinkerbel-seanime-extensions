@@ -107,6 +107,10 @@ interface NekoMediaInfo {
     // Every mapping range of this AniList entry (long series span many seasons)
     entries: NekoBTAnilistEntry[]
     episodes: NekoBTEpisode[]
+    // Ids of every episode of the nekoBT media (not just this entry), to notice a stale cache
+    allEpisodeIds?: string[]
+    // true when this came from $store instead of a fresh fetch
+    fromCache?: boolean
     // nekoBT episode id -> AniList episode number
     episodeNumberById: Map<string, number>
 }
@@ -119,6 +123,7 @@ interface CachedNekoMedia {
     // Every mapping range of this AniList entry (long series span many seasons)
     entries: NekoBTAnilistEntry[]
     episodes: NekoBTEpisode[]
+    allEpisodeIds?: string[]
 }
 
 interface SeaDexTr {
@@ -166,14 +171,13 @@ const SEADEX_URL = "https://releases.moe/api/collections/entries/records"
 const PAGE_LIMIT = 100
 const MAX_PAGES = 5
 
-// How long nekoBT media info and SeaDex lists are reused (only if Seanime gives extensions a store, see cacheGet)
+// How long SeaDex lists are reused (only if Seanime gives extensions a store, see cacheGet)
 const CACHE_TTL_MS = 60 * 60 * 1000
+// How long nekoBT media info is reused. nekoBT adds a season's episode ids all at once (padded to 12 when the
+// count is unknown), and a stale cache is also noticed and refreshed, see searchMedia and collect.
+const MEDIA_TTL_MS = 24 * 60 * 60 * 1000
 // How long "this anime is not on nekoBT" is remembered
 const MISSING_TTL_MS = 30 * 60 * 1000
-// Finished/cancelled anime don't get new episodes, so their nekoBT media info is reused longer
-const FINISHED_TTL_MS = 24 * 60 * 60 * 1000
-// Above this many episode ids the URL gets huge, so nekoBT is asked to narrow by AniList ID instead
-const MAX_EPISODE_IDS = 150
 // Sub level used for torrents nekoBT has no level for (lower than -1 = "no subs")
 const UNKNOWN_LEVEL = -2
 const VIDEO_FILE = /\.(mkv|mp4|avi|m2ts|ts|webm|mov|wmv|flv|ogm)$/i
@@ -357,9 +361,19 @@ class Provider {
             freeText?: boolean
         },
     ): Promise<AnimeTorrent[]> {
-        const [nekoMedia, seaDex] = await Promise.all([this.getNekoMedia(media), this.getSeaDexBest(media.id)])
+        let [nekoMedia, seaDex] = await Promise.all([this.getNekoMedia(media), this.getSeaDexBest(media.id)])
         if (!nekoMedia) console.warn(`nekoBT: No nekoBT media found for AniList ID ${media.id}`)
         const wantedEp = opts.episodeNumber && opts.episodeNumber > 0 ? opts.episodeNumber : undefined
+
+        // Cached media info that doesn't know the requested episode (an airing show got new episode ids): refetch once.
+        // Not for episodes beyond a known episode count, those simply don't exist.
+        const withinCount = !media.episodeCount || media.episodeCount <= 0 || (wantedEp ?? 0) <= media.episodeCount
+        if (nekoMedia && nekoMedia.fromCache && !nekoMedia.fallback && wantedEp !== undefined && !opts.batch
+            && withinCount && !this.findEpisode(nekoMedia, wantedEp)) {
+            console.log(`nekoBT: Episode ${wantedEp} not in cached media info for AniList ${media.id}, refreshing`)
+            this.forgetNekoMedia(media.id)
+            nekoMedia = await this.getNekoMedia(media)
+        }
 
         const first = await this.collect(media, nekoMedia, seaDex, opts, wantedEp, false)
 
@@ -400,16 +414,23 @@ class Provider {
             if (nekoMedia && !freeText) {
                 // Without episode_match_any the API only returns torrents containing ALL listed episodes,
                 // so it is always enabled and `batch` decides between packs and single episodes.
-                let episodeIds: string[] = nekoMedia.episodes.map(e => String(e.id))
-                if (wantedEp !== undefined && !opts.batch) {
-                    const single = this.findEpisode(nekoMedia, wantedEp)
-                    if (single) episodeIds = [String(single.id)]
-                }
-                const byAnilistId = nekoMedia.useExternalId || (!nekoMedia.fallback && episodeIds.length > MAX_EPISODE_IDS)
-                params.push(`media_id=${byAnilistId ? `anilist-${media.id}` : nekoMedia.mediaId}`)
-                if (!byAnilistId && episodeIds.length > 0) {
-                    params.push(`episode_ids=${episodeIds.join(",")}`)
-                    params.push("episode_match_any=true")
+                if (nekoMedia.fallback) {
+                    // Specials without their own AniList mapping: the parent series' unmapped episodes
+                    params.push(`media_id=${nekoMedia.mediaId}`)
+                    const ids = nekoMedia.episodes.map(e => String(e.id))
+                    if (ids.length > 0) {
+                        params.push(`episode_ids=${ids.join(",")}`)
+                        params.push("episode_match_any=true")
+                    }
+                } else {
+                    // nekoBT narrows the AniList ID to this entry's episodes itself, also across several seasons
+                    // or several nekoBT media. A single episode still needs its nekoBT episode id.
+                    params.push(`media_id=anilist-${media.id}`)
+                    const single = wantedEp !== undefined && !opts.batch ? this.findEpisode(nekoMedia, wantedEp) : null
+                    if (single) {
+                        params.push(`episode_ids=${single.id}`)
+                        params.push("episode_match_any=true")
+                    }
                 }
 
                 if (opts.batch === true) params.push("batch=true")
@@ -419,7 +440,20 @@ class Provider {
             if (query) params.push(`query=${encodeURIComponent(query)}`)
             params.push(...this.buildUserFilters())
 
-            for (const t of await this.fetchAllPages(params)) {
+            const fetched = await this.fetchAllPages(params)
+
+            // A torrent of this nekoBT media with an episode id the cached media info doesn't know: forget the cache
+            if (nekoMedia && !nekoMedia.fallback && nekoMedia.fromCache && nekoMedia.allEpisodeIds) {
+                const known = new Set(nekoMedia.allEpisodeIds)
+                const stale = fetched.some(t => t.media_id === nekoMedia.mediaId
+                    && (t.media_episode_ids || []).some(id => !known.has(String(id))))
+                if (stale) {
+                    console.log(`nekoBT: Cached media info for AniList ${media.id} is out of date, it will be refreshed`)
+                    this.forgetNekoMedia(media.id)
+                }
+            }
+
+            for (const t of fetched) {
                 if (!t.infohash) continue
                 const hash = t.infohash.toLowerCase()
                 if (seen.has(hash)) continue
@@ -572,7 +606,7 @@ class Provider {
         const stored = this.cacheGet<CachedNekoMedia>(`nekobt:media:${anilistId}`)
         if (stored) {
             console.log(`nekoBT: Using cached media info for AniList ${anilistId}`)
-            const cached = this.buildNekoMedia(stored)
+            const cached = { ...this.buildNekoMedia(stored), fromCache: true }
             this.mediaCache.set(anilistId, cached)
             return cached
         }
@@ -600,7 +634,7 @@ class Provider {
             }
             if (fb) {
                 this.mediaCache.set(anilistId, fb)
-                this.persistNekoMedia(anilistId, fb, media)
+                this.persistNekoMedia(anilistId, fb)
             } else if (meta.status === 404) {
                 // Only a real "not found" is remembered, never a network error or rate limit
                 this.cacheSet(missingKey, true, MISSING_TTL_MS)
@@ -619,9 +653,10 @@ class Provider {
         const episodes = mapped.length > 0 ? allEpisodes.filter(e => mapped.some(en => this.inEntry(e, en))) : []
         const useExternalId = mapped.length === 0 || episodes.length === 0
 
-        const nekoMedia = this.buildNekoMedia({ fallback: false, mediaId, useExternalId, entries: mapped, episodes })
+        const allEpisodeIds = allEpisodes.map(e => String(e.id))
+        const nekoMedia = this.buildNekoMedia({ fallback: false, mediaId, useExternalId, entries: mapped, episodes, allEpisodeIds })
         this.mediaCache.set(anilistId, nekoMedia)
-        this.persistNekoMedia(anilistId, nekoMedia, media)
+        this.persistNekoMedia(anilistId, nekoMedia)
         return nekoMedia
     }
 
@@ -638,16 +673,21 @@ class Provider {
         return { ...d, episodeNumberById }
     }
 
-    private persistNekoMedia(anilistId: number, nekoMedia: NekoMediaInfo, media: Media) {
+    private persistNekoMedia(anilistId: number, nekoMedia: NekoMediaInfo) {
         const data: CachedNekoMedia = {
             fallback: nekoMedia.fallback,
             mediaId: nekoMedia.mediaId,
             useExternalId: nekoMedia.useExternalId,
             entries: nekoMedia.entries,
             episodes: nekoMedia.episodes,
+            allEpisodeIds: nekoMedia.allEpisodeIds,
         }
-        const done = media.status === "FINISHED" || media.status === "CANCELLED"
-        this.cacheSet(`nekobt:media:${anilistId}`, data, done ? FINISHED_TTL_MS : CACHE_TTL_MS)
+        this.cacheSet(`nekobt:media:${anilistId}`, data, MEDIA_TTL_MS)
+    }
+
+    private forgetNekoMedia(anilistId: number) {
+        this.mediaCache.delete(anilistId)
+        this.cacheRemove(`nekobt:media:${anilistId}`)
     }
 
     //+ ----------------------------------------------------------------------------------------------
@@ -680,6 +720,14 @@ class Provider {
             return entry.v
         } catch (e) {
             return null
+        }
+    }
+
+    private cacheRemove(key: string) {
+        try {
+            const store = this.getStore()
+            if (store && typeof store.remove === "function") store.remove(key)
+        } catch (e) {
         }
     }
 
