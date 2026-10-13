@@ -346,9 +346,9 @@ class Provider {
 
         const first = await this.collect(media, nekoMedia, seaDex, opts, wantedEp, false)
 
-        // No nekoBT results without batches (e.g. older seasons only released as batches): include batches anyway.
-        // SeaDex releases don't count here, otherwise one SeaDex match would hide every nekoBT batch.
-        if (first.nekoCount === 0 && opts.batch !== true && wantedEp !== undefined) {
+        // Batches off and no single-episode release anywhere (nekoBT or SeaDex): include batches from both.
+        // The first pass contains no batches, so any result means a single episode was found.
+        if (first.torrents.length === 0 && opts.batch !== true && wantedEp !== undefined) {
             return (await this.collect(media, nekoMedia, seaDex, opts, wantedEp, true)).torrents
         }
         return first.torrents
@@ -361,11 +361,9 @@ class Provider {
         opts: { query?: string, batch?: boolean, resolution?: string },
         wantedEp: number | undefined,
         includeBatches: boolean,
-    ): Promise<{ torrents: AnimeTorrent[], nekoCount: number }> {
+    ): Promise<{ torrents: AnimeTorrent[] }> {
         const results: AnimeTorrent[] = []
         const seen = new Set<string>()
-        // Info hashes of releases added from SeaDex (not found on nekoBT)
-        const pulled = new Set<string>()
         // nekoBT episode ids per info hash, for the per-episode fansub preference
         const episodesByHash = new Map<string, string[]>()
 
@@ -431,8 +429,10 @@ class Provider {
                 const isBatch = files.length !== 1
                 if (opts.batch === true) return isBatch
                 if (wantedEp !== undefined) {
-                    // Single files and batches alike must contain the episode. Releases whose files
-                    // carry no recognisable episode numbers are kept.
+                    // Batches off: SeaDex batches only appear in the batch fallback, like nekoBT batches
+                    if (isBatch && !includeBatches) return false
+                    // The release must contain the episode. Releases whose files carry no recognisable
+                    // episode numbers are kept.
                     const eps = this.releaseEpisodes(files, nekoMedia, media)
                     return eps.size === 0 || eps.has(wantedEp)
                 }
@@ -442,10 +442,7 @@ class Provider {
             await this.prefetchNyaaDetails(wanted)
             const built = await this.mapLimited(wanted, NYAA_CONCURRENCY, (tr, i) => this.getSeaDexTorrent(tr, media, nekoMedia, i < MAX_SEADEX_SCRAPES))
             for (const t of built) {
-                if (t.infoHash) {
-                    seen.add(t.infoHash)
-                    pulled.add(t.infoHash)
-                }
+                if (t.infoHash) seen.add(t.infoHash)
                 results.push(t)
             }
         }
@@ -464,8 +461,7 @@ class Provider {
 
         const filtered = await this.filterByResolution(results, opts.resolution)
         const torrents = this.applyFansubPreference(filtered, episodesByHash)
-        const nekoCount = torrents.filter(t => !t.infoHash || !pulled.has(t.infoHash)).length
-        return { torrents, nekoCount }
+        return { torrents }
     }
 
     // "Prefer fansubs", decided per episode: for every episode, only torrents with the highest sub level available
