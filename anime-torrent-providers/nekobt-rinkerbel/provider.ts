@@ -351,8 +351,8 @@ class Provider {
         // Cached media info that doesn't know the requested episode (an airing show got new episode ids): refetch once.
         // Not for episodes beyond a known episode count, those simply don't exist.
         const withinCount = !media.episodeCount || media.episodeCount <= 0 || (wantedEp ?? 0) <= media.episodeCount
-        if (nekoMedia && nekoMedia.fromCache && !nekoMedia.fallback && wantedEp !== undefined && !opts.batch
-            && withinCount && !this.findEpisode(nekoMedia, wantedEp)) {
+        if (nekoMedia && nekoMedia.fromCache && !nekoMedia.fallback && nekoMedia.episodes.length > 0
+            && wantedEp !== undefined && !opts.batch && withinCount && !this.findEpisode(nekoMedia, wantedEp)) {
             console.log(`nekoBT: Episode ${wantedEp} not in cached media info for AniList ${media.id}, refreshing`)
             this.forgetNekoMedia(media.id)
             nekoMedia = await this.getNekoMedia(media)
@@ -624,9 +624,22 @@ class Provider {
             }
             return fb
         }
-        const mediaId = resolved.data.media_id
+        let mediaId = resolved.data.media_id
 
-        const mediaRes = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${mediaId}`)
+        const mediaMeta: { status?: number } = {}
+        let mediaRes = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${mediaId}`, 0, mediaMeta)
+        if (!mediaRes && mediaMeta.status === 404) {
+            // resolve can point at a media that doesn't exist (seen with an AniList entry spread over two nekoBT media)
+            const found = await this.discoverNekoMedia(anilistId, mediaId)
+            if (found) {
+                console.log(`nekoBT: resolve gave ${mediaId} for AniList ${anilistId}, which doesn't exist; using ${found.id} found through its torrents`)
+                mediaId = found.id
+                mediaRes = found.res
+            }
+        } else if (!mediaRes) {
+            // Network error, rate limit, ...: use the AniList ID for this search, but don't remember the empty result
+            return this.buildNekoMedia({ fallback: false, mediaId, useExternalId: true, entries: [], episodes: [] })
+        }
         const allEpisodes = mediaRes?.data?.episodes ?? []
         // An AniList entry can have several mapping ranges (One Piece spans 24 seasons plus specials).
         // Only keep the episodes inside those ranges. This includes season 0 when the entry maps to specials.
@@ -641,6 +654,22 @@ class Provider {
         this.mediaCache.set(anilistId, nekoMedia)
         this.persistNekoMedia(anilistId, nekoMedia)
         return nekoMedia
+    }
+
+    // Finds the nekoBT media that really holds this AniList entry: search torrents by AniList ID (nekoBT expands it
+    // server-side), then check the media ids of the results for a mapping to this AniList entry.
+    private async discoverNekoMedia(anilistId: number, skipId: string): Promise<{ id: string, res: NekoBTMediaResponse } | null> {
+        const search = await this.fetchSearch(["sort_by=best", "category=0", "limit=25", `media_id=anilist-${anilistId}`])
+        const ids: string[] = []
+        for (const t of search?.data?.results ?? []) {
+            if (t.media_id && t.media_id !== skipId && ids.indexOf(t.media_id) === -1) ids.push(t.media_id)
+        }
+        for (const id of ids.slice(0, 3)) {
+            const res = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${id}`)
+            const entries = res?.data?.anilist?.entries ?? []
+            if (entries.some(e => e.anilist_id === anilistId)) return { id, res: res! }
+        }
+        return null
     }
 
     // nekoBT episode id -> AniList episode number is derived from the entry mapping
