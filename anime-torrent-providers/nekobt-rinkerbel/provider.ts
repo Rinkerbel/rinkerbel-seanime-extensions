@@ -225,6 +225,8 @@ const MAX_SEADEX_SCRAPES = 12
 const NYAA_CONCURRENCY = 3
 // Nyaa RSS searches (SeaDex "grouped" search links) per search
 const MAX_NYAA_RSS = 5
+// How long a Nyaa feed counts as "already read" (releases found in it are kept until Seanime restarts)
+const NYAA_FEED_TTL_MS = 24 * 60 * 60 * 1000
 
 const ALL_VIDEO_TYPE_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16]
 
@@ -513,7 +515,7 @@ class Provider {
                 return false
             })
             // One Nyaa RSS request per SeaDex search link covers many releases; only what's left is scraped
-            await this.prefetchNyaaDetails(wanted)
+            await this.prefetchNyaaDetails(wanted, seaDex)
             const built = await this.mapLimited(wanted, NYAA_CONCURRENCY, (tr, i) => this.getSeaDexTorrent(tr, media, nekoMedia, i < MAX_SEADEX_SCRAPES))
             // A typed query applies to SeaDex releases too (nekoBT applies it to its own results)
             const matchesQuery = this.buildQueryMatcher(query, media)
@@ -1132,27 +1134,31 @@ class Provider {
     // SeaDex links most releases to a Nyaa search ("groupedUrl"). The same search as RSS returns title, seeders,
     // leechers, downloads, size and info hash for every match, so one request replaces many page scrapes.
     // Releases not found this way fall back to scraping their own page.
-    private async prefetchNyaaDetails(trs: SeaDexTr[]) {
+    private async prefetchNyaaDetails(trs: SeaDexTr[], allReleases: SeaDexTr[]) {
         const groups = new Map<string, SeaDexTr[]>()
         for (const tr of trs) {
             const g = tr.groupedUrl || ""
             if (!/^https:\/\/nyaa\.si\//.test(g)) continue
             if (this.cacheGet<NyaaDetails>(`nekobt:nyaa:${tr.infoHash.toLowerCase()}`)) continue
+            // This search was already read recently; releases missing from it are scraped from their own page instead
+            if (this.cacheGet<boolean>(`nekobt:rss:${g}`)) continue
             const list = groups.get(g) ?? []
             list.push(tr)
             groups.set(g, list)
         }
 
+        // Every release of this anime found in a feed is stored, not just the ones this search needs,
+        // so a later search (other episode, simple search) doesn't read the same feed again
+        const known = new Set(allReleases.map(tr => tr.infoHash.toLowerCase()))
         let queries = 0
-        for (const [url, list] of groups) {
+        for (const url of groups.keys()) {
             if (queries++ >= MAX_NYAA_RSS) break
-            const rssUrl = this.toNyaaRssUrl(url)
-            const items = await this.fetchNyaaRss(rssUrl)
-            for (const tr of list) {
-                const hash = tr.infoHash.toLowerCase()
-                const d = items.get(hash)
-                if (d) this.cacheSet(`nekobt:nyaa:${hash}`, d, null)
+            const items = await this.fetchNyaaRss(this.toNyaaRssUrl(url))
+            if (items.size === 0) continue // failed or empty: try again next time
+            for (const [hash, d] of items) {
+                if (known.has(hash)) this.cacheSet(`nekobt:nyaa:${hash}`, d, null)
             }
+            this.cacheSet(`nekobt:rss:${url}`, true, NYAA_FEED_TTL_MS)
         }
     }
 
