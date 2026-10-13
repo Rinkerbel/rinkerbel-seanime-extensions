@@ -1316,7 +1316,7 @@ class Provider {
             name,
             date: isNaN(created.getTime()) ? new Date().toISOString() : created.toISOString(),
             size,
-            formattedSize, // empty lets Seanime format the size
+            formattedSize: formattedSize || this.formatBytes(size),
             seeders,
             leechers,
             downloadCount: downloads,
@@ -1589,7 +1589,7 @@ class Provider {
             name: title,
             date,
             size,
-            formattedSize: "", // Seanime formats the size
+            formattedSize: this.formatBytes(size),
             seeders: this.toNumber(t.seeders),
             leechers: this.toNumber(t.leechers),
             downloadCount: this.toNumber(t.completed),
@@ -1606,5 +1606,14 @@ class Provider {
             confirmed: !!nekoMedia && !nekoMedia.fallback
                 && (scoped || ids.some(id => nekoMedia.episodeNumberById.has(id))),
         }
+    }
+
+    // Seanime shows no size when formattedSize is empty, so format it here, in the same units as Nyaa ("3.7 GiB")
+    private formatBytes(bytes: number): string {
+        if (!bytes || bytes <= 0) return ""
+        const units = ["B", "KiB", "MiB", "GiB", "TiB"]
+        const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+        const value = bytes / Math.pow(1024, i)
+        return (i === 0 ? String(bytes) : value.toFixed(1)) + " " + units[i]
     }
 }
