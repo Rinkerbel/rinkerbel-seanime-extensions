@@ -141,6 +141,18 @@ interface NyaaDetails {
     formattedSize: string
 }
 
+// Parsed search query (Nyaa syntax)
+type QueryNode =
+    | { kind: "term", tokens: string[] }
+    | { kind: "and", items: QueryNode[] }
+    | { kind: "or", items: QueryNode[] }
+    | { kind: "not", item: QueryNode }
+
+interface QueryToken {
+    type: "word" | "phrase" | "(" | ")" | "|" | "-"
+    value: string
+}
+
 interface SeaDexRecordsResponse {
     items?: { expand?: { trs?: SeaDexTr[] } }[]
 }
@@ -267,7 +279,7 @@ class Provider {
 
     public async search(opts: AnimeSearchOptions): Promise<AnimeTorrent[]> {
         try {
-            return await this.searchMedia(opts.media, { query: opts.query })
+            return await this.searchMedia(opts.media, { query: opts.query, freeText: true })
         } catch (error) {
             console.error("nekoBT: Error in search: " + (error as Error).message)
             return []
@@ -341,6 +353,8 @@ class Provider {
             // The episode Seanime has selected, also in batch mode (used to always show SeaDex best releases)
             knownEpisode?: number
             resolution?: string
+            // Simple search: search nekoBT by the query alone, like Nyaa, without restricting to this anime's episodes
+            freeText?: boolean
         },
     ): Promise<AnimeTorrent[]> {
         const [nekoMedia, seaDex] = await Promise.all([this.getNekoMedia(media), this.getSeaDexBest(media.id)])
@@ -361,7 +375,7 @@ class Provider {
         media: Media,
         nekoMedia: NekoMediaInfo | null,
         seaDex: SeaDexTr[],
-        opts: { query?: string, batch?: boolean, resolution?: string, knownEpisode?: number },
+        opts: { query?: string, batch?: boolean, resolution?: string, knownEpisode?: number, freeText?: boolean },
         wantedEp: number | undefined,
         includeBatches: boolean,
     ): Promise<{ torrents: AnimeTorrent[], regularCount: number }> {
@@ -373,7 +387,9 @@ class Provider {
         const episodesByHash = new Map<string, string[]>()
 
         // ---- nekoBT
-        if (nekoMedia) {
+        const query = (opts.query || "").trim()
+        const freeText = !!opts.freeText && query.length > 0
+        if (nekoMedia || freeText) {
             const params: string[] = [
                 "sort_by=best",
                 "category=0",
@@ -381,24 +397,25 @@ class Provider {
                 "upgraded=false",
             ]
 
-            // Without episode_match_any the API only returns torrents containing ALL listed episodes,
-            // so it is always enabled and `batch` decides between packs and single episodes.
-            let episodeIds: string[] = nekoMedia.episodes.map(e => String(e.id))
-            if (wantedEp !== undefined && !opts.batch) {
-                const single = this.findEpisode(nekoMedia, wantedEp)
-                if (single) episodeIds = [String(single.id)]
-            }
-            const byAnilistId = nekoMedia.useExternalId || (!nekoMedia.fallback && episodeIds.length > MAX_EPISODE_IDS)
-            params.push(`media_id=${byAnilistId ? `anilist-${media.id}` : nekoMedia.mediaId}`)
-            if (!byAnilistId && episodeIds.length > 0) {
-                params.push(`episode_ids=${episodeIds.join(",")}`)
-                params.push("episode_match_any=true")
+            if (nekoMedia && !freeText) {
+                // Without episode_match_any the API only returns torrents containing ALL listed episodes,
+                // so it is always enabled and `batch` decides between packs and single episodes.
+                let episodeIds: string[] = nekoMedia.episodes.map(e => String(e.id))
+                if (wantedEp !== undefined && !opts.batch) {
+                    const single = this.findEpisode(nekoMedia, wantedEp)
+                    if (single) episodeIds = [String(single.id)]
+                }
+                const byAnilistId = nekoMedia.useExternalId || (!nekoMedia.fallback && episodeIds.length > MAX_EPISODE_IDS)
+                params.push(`media_id=${byAnilistId ? `anilist-${media.id}` : nekoMedia.mediaId}`)
+                if (!byAnilistId && episodeIds.length > 0) {
+                    params.push(`episode_ids=${episodeIds.join(",")}`)
+                    params.push("episode_match_any=true")
+                }
+
+                if (opts.batch === true) params.push("batch=true")
+                else if (wantedEp !== undefined && !includeBatches) params.push("batch=false")
             }
 
-            if (opts.batch === true) params.push("batch=true")
-            else if (wantedEp !== undefined && !includeBatches) params.push("batch=false")
-
-            const query = (opts.query || "").trim()
             if (query) params.push(`query=${encodeURIComponent(query)}`)
             params.push(...this.buildUserFilters())
 
@@ -415,7 +432,7 @@ class Provider {
             }
 
             // Fallback mode has no episode mapping: select the episode from the torrent name instead
-            if (nekoMedia.fallback && wantedEp !== undefined && !opts.batch) {
+            if (nekoMedia && nekoMedia.fallback && wantedEp !== undefined && !opts.batch) {
                 for (let i = results.length - 1; i >= 0; i--) {
                     const n = results[i].episodeNumber
                     if (n !== -1 && n !== wantedEp) results.splice(i, 1)
@@ -466,7 +483,10 @@ class Provider {
             // One Nyaa RSS request per SeaDex search link covers many releases; only what's left is scraped
             await this.prefetchNyaaDetails(wanted)
             const built = await this.mapLimited(wanted, NYAA_CONCURRENCY, (tr, i) => this.getSeaDexTorrent(tr, media, nekoMedia, i < MAX_SEADEX_SCRAPES))
+            // A typed query applies to SeaDex releases too (nekoBT applies it to its own results)
+            const matchesQuery = this.buildQueryMatcher(query, media)
             for (const t of built) {
+                if (matchesQuery && !matchesQuery(t.name.replace(/^\[(BEST|ALT)\] /, ""))) continue
                 if (t.infoHash) seen.add(t.infoHash)
                 results.push(t)
             }
@@ -735,6 +755,137 @@ class Provider {
             }
         }
         return null
+    }
+
+    //+ ----------------------------------------------------------------------------------------------
+    // Search query matching (Nyaa syntax), used for SeaDex releases
+    //   foo bar      both words
+    //   foo|bar      either word
+    //   -foo         without the word (also -"foo bar" and -(foo|bar))
+    //   "foo bar"    the exact phrase
+    //   (foo bar)    grouping
+    // Words that belong to the anime's own titles always count as matched, because every SeaDex release
+    // is for this anime even when it is named differently ("ao no hako" vs "Blue Box").
+    //+ ----------------------------------------------------------------------------------------------
+
+    private queryTokens(s: string): string[] {
+        return s.toLowerCase().replace(/['’`]/g, "").split(/[^0-9a-z\u00c0-\uffff]+/).filter(Boolean)
+    }
+
+    private tokenizeQuery(q: string): QueryToken[] {
+        const out: QueryToken[] = []
+        let i = 0
+        while (i < q.length) {
+            const c = q[i]
+            if (/\s/.test(c)) {
+                i++
+            } else if (c === "\"") {
+                const end = q.indexOf("\"", i + 1)
+                out.push({ type: "phrase", value: end === -1 ? q.slice(i + 1) : q.slice(i + 1, end) })
+                i = end === -1 ? q.length : end + 1
+            } else if (c === "(" || c === ")" || c === "|") {
+                out.push({ type: c, value: c })
+                i++
+            } else if (c === "-" && i + 1 < q.length && !/\s/.test(q[i + 1])) {
+                out.push({ type: "-", value: c })
+                i++
+            } else {
+                let j = i
+                while (j < q.length && !/[\s"()|]/.test(q[j])) j++
+                out.push({ type: "word", value: q.slice(i, j) })
+                i = j
+            }
+        }
+        return out
+    }
+
+    private parseQuery(q: string): QueryNode | null {
+        const toks = this.tokenizeQuery(q)
+        let pos = 0
+        const parseUnary = (): QueryNode | null => {
+            if (pos >= toks.length) return null
+            const tk = toks[pos++]
+            if (tk.type === "-") {
+                const n = parseUnary()
+                return n ? { kind: "not", item: n } : null
+            }
+            if (tk.type === "(") {
+                const n = parseAnd()
+                if (pos < toks.length && toks[pos].type === ")") pos++
+                return n
+            }
+            if (tk.type === ")" || tk.type === "|") return null
+            return { kind: "term", tokens: this.queryTokens(tk.value) }
+        }
+        const parseOr = (): QueryNode | null => {
+            const items: QueryNode[] = []
+            const first = parseUnary()
+            if (first) items.push(first)
+            while (pos < toks.length && toks[pos].type === "|") {
+                pos++
+                const n = parseUnary()
+                if (n) items.push(n)
+            }
+            if (items.length === 0) return null
+            return items.length === 1 ? items[0] : { kind: "or", items }
+        }
+        const parseAnd = (): QueryNode => {
+            const items: QueryNode[] = []
+            while (pos < toks.length && toks[pos].type !== ")") {
+                const n = parseOr()
+                if (n) items.push(n)
+            }
+            return { kind: "and", items }
+        }
+
+        const items: QueryNode[] = []
+        while (pos < toks.length) {
+            if (toks[pos].type === ")") {
+                pos++
+                continue
+            }
+            const n = parseOr()
+            if (n) items.push(n)
+        }
+        return items.length > 0 ? { kind: "and", items } : null
+    }
+
+    // Returns null when there is no query (everything matches)
+    private buildQueryMatcher(query: string | undefined, media: Media): ((name: string) => boolean) | null {
+        const q = (query || "").trim()
+        if (!q) return null
+        const root = this.parseQuery(q)
+        if (!root) return null
+
+        const titles = [media.romajiTitle, media.englishTitle, ...(media.synonyms || [])]
+            .filter((t): t is string => !!t)
+            .map(t => this.queryTokens(t).join(" "))
+        const titleWords = new Set(titles.join(" ").split(" ").filter(Boolean))
+
+        return (name: string) => {
+            const hay = " " + this.queryTokens(name).join(" ") + " "
+            const evalNode = (n: QueryNode, allowTitle: boolean): boolean => {
+                switch (n.kind) {
+                    case "term": {
+                        if (n.tokens.length === 0) return true
+                        const phrase = n.tokens.join(" ")
+                        if (hay.indexOf(" " + phrase + " ") !== -1) return true
+                        if (!allowTitle) return false
+                        return n.tokens.length === 1
+                            ? titleWords.has(phrase)
+                            : titles.some(t => (" " + t + " ").indexOf(" " + phrase + " ") !== -1)
+                    }
+                    case "and":
+                        return n.items.every(i => evalNode(i, allowTitle))
+                    case "or":
+                        return n.items.some(i => evalNode(i, allowTitle))
+                    case "not":
+                        // A negated title word must really be absent from the name
+                        return !evalNode(n.item, false)
+                }
+            }
+            return evalNode(root, true)
+        }
     }
 
     // AniList episode numbers contained in a release, from its video file names
