@@ -55,6 +55,7 @@ interface NekoBTEpisode {
 
 interface NekoBTRelation {
     id: number
+    relation_type?: string // SEQUEL, PREQUEL, SIDE_STORY, ...
 }
 
 interface NekoBTAnilistEntry {
@@ -185,6 +186,10 @@ const CACHE_TTL_MS = 60 * 60 * 1000
 const MEDIA_TTL_MS = 24 * 60 * 60 * 1000
 // How long "this anime is not on nekoBT" is remembered
 const MISSING_TTL_MS = 30 * 60 * 1000
+// How long nekoBT torrent search results are reused. Seanime keeps its own search results for 30 minutes
+// (its GcTime), so this costs no extra freshness: it only saves the request when a Seanime option that
+// doesn't change our request changes, like the resolution dropdown.
+const SEARCH_TTL_MS = 30 * 60 * 1000
 // Sub level used for torrents nekoBT has no level for (lower than -1 = "no subs")
 const UNKNOWN_LEVEL = -2
 // nekoBT media search similarity (0-1) needed to accept a series nekoBT hasn't mapped to AniList
@@ -593,15 +598,58 @@ class Provider {
     }
 
     private async fetchAllPages(params: string[]): Promise<NekoBTTorrent[]> {
+        // The key is the whole request, so any change to the query or your filters is a different entry
+        const cacheKey = `nekobt:search:${params.join("&")}`
+        const stored = this.cacheGet<NekoBTTorrent[]>(cacheKey)
+        if (stored) {
+            console.log("nekoBT: Using cached nekoBT search results")
+            return stored
+        }
+
         const all: NekoBTTorrent[] = []
+        let complete = false
         for (let page = 0; page < MAX_PAGES; page++) {
             const pageParams = page > 0 ? [...params, `offset=${page * PAGE_LIMIT}`] : params
             const res = await this.fetchSearch(pageParams)
             if (!res || !res.data || !Array.isArray(res.data.results)) break
             all.push(...res.data.results)
-            if (!res.data.more) break
+            if (!res.data.more || page === MAX_PAGES - 1) {
+                complete = true
+                break
+            }
         }
+
+        // Only complete result sets are kept (never after a failed request), and only the fields we use
+        if (complete) this.cacheSet(cacheKey, all.map(t => this.slimTorrent(t)), SEARCH_TTL_MS)
         return all
+    }
+
+    // The fields of a search result that are used later; the rest (descriptions, uploader details...) is dropped
+    private slimTorrent(t: NekoBTTorrent): NekoBTTorrent {
+        return {
+            id: t.id,
+            uploaded_at: t.uploaded_at,
+            title: t.title,
+            infohash: t.infohash,
+            magnet: t.magnet,
+            media_id: t.media_id,
+            media_episode_ids: t.media_episode_ids,
+            filesize: t.filesize,
+            seeders: t.seeders,
+            leechers: t.leechers,
+            completed: t.completed,
+            groups: (t.groups || []).map(g => ({
+                id: g.id,
+                display_name: g.display_name,
+                name: g.name,
+                uploading_group: g.uploading_group,
+            })),
+            batch: t.batch,
+            level: t.level,
+            audio_lang: t.audio_lang,
+            sub_lang: t.sub_lang,
+            fsub_lang: t.fsub_lang,
+        }
     }
 
     private async fetchSearch(params: string[]): Promise<NekoBTSearchResponse | null> {
@@ -846,7 +894,26 @@ class Provider {
                 const res = await this.fetchJson<NekoBTMediaResponse>(`${API_URL}/media/${cand.id}?force=true`)
                 if (!res) continue
                 const entries = res.data?.anilist?.entries ?? anilist.entries ?? []
-                const orphans = (res.data?.episodes ?? []).filter(e => !entries.some(en => this.inEntry(e, en)))
+                const allEpisodes = res.data?.episodes ?? []
+
+                // A sequel or prequel of a mapped entry inside the same nekoBT season (Steel Ball Run 2nd & 3rd
+                // STAGE continues 1st STAGE's season): its episodes are the ones right after (or before) that entry
+                const neighbour = this.neighbourEntry(media, entries, allEpisodes)
+                if (neighbour) {
+                    console.log(`nekoBT: AniList ${media.id} not mapped, using ${cand.id} season ${neighbour.entry.season} episodes ${neighbour.entry.src_start}-${neighbour.entry.src_end ?? "end"}`)
+                    return {
+                        ...this.buildNekoMedia({
+                            fallback: false,
+                            mediaId: cand.id,
+                            entries: [neighbour.entry],
+                            episodes: neighbour.episodes,
+                            allEpisodeIds: allEpisodes.map(e => String(e.id)),
+                        }),
+                        byMediaId: true,
+                    }
+                }
+
+                const orphans = allEpisodes.filter(e => !entries.some(en => this.inEntry(e, en)))
                 if (orphans.length === 0) continue
 
                 console.log(`nekoBT: AniList ${media.id} not mapped, using unmapped episodes of ${cand.id}`)
@@ -1089,6 +1156,40 @@ class Provider {
             return season === 1 ? eps : []
         }
         return eps
+    }
+
+    // For an unmapped AniList entry that is the SEQUEL (or PREQUEL) of a mapped entry: the unmapped episodes
+    // directly after (or before) that entry in the same nekoBT season, numbered from 1. Returns null when that
+    // range is empty or overlaps another mapped entry, so the caller falls back to all unmapped episodes.
+    private neighbourEntry(media: Media, entries: NekoBTAnilistEntry[], episodes: NekoBTEpisode[]): { entry: NekoBTAnilistEntry, episodes: NekoBTEpisode[] } | null {
+        const count = media.episodeCount && media.episodeCount > 0 ? media.episodeCount : 0
+        for (const en of entries) {
+            if (en.season === null || en.season === undefined || en.ratio) continue
+            const rel = (en.media?.relations ?? []).find(r => r.id === media.id)
+            if (!rel) continue
+
+            let start: number
+            let end: number | null
+            if (rel.relation_type === "SEQUEL" && en.src_end !== null && en.src_end !== undefined) {
+                start = en.src_end + 1
+                end = count ? start + count - 1 : null
+            } else if (rel.relation_type === "PREQUEL" && count) {
+                end = en.src_start - 1
+                start = end - count + 1
+                if (start < 1) continue
+            } else {
+                continue
+            }
+
+            const entry: NekoBTAnilistEntry = {
+                season: en.season, src_start: start, src_end: end, dst_start: 1, dst_end: count || null, ratio: null, anilist_id: media.id,
+            }
+            const covered = episodes.filter(e => this.inEntry(e, entry))
+            if (covered.length === 0) continue
+            if (covered.some(e => entries.some(other => this.inEntry(e, other)))) continue
+            return { entry, episodes: covered }
+        }
+        return null
     }
 
     // A nekoBT series without AniList mapping. With one regular season, its episodes map 1:1 to the AniList
