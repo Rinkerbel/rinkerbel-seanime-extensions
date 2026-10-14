@@ -254,13 +254,22 @@ const NYAA_TRACKERS = [
 const MAX_SEADEX_SCRAPES = 12
 // Nyaa pages scraped at the same time (Nyaa rate limits bursts)
 const NYAA_CONCURRENCY = 3
-// Nyaa pages read per search for imported nekoBT torrents the feed didn't contain
-const MAX_IMPORTED_SCRAPES = 8
-// Most distinct titles and group names put into the Nyaa feed query for imported torrents
+// Imported torrents: at most 3 Nyaa feed searches, each only for what the previous ones didn't return,
+// then at most 3 Nyaa page reads. Whatever is left keeps nekoBT's own peer counts.
+const MAX_FEED_ROUNDS = 3
+const MAX_NYAA_PAGE_READS = 3
+// A torrent imported within this long of its Nyaa upload isn't looked up on Nyaa
+const IMPORT_SKIP_MS = 24 * 60 * 60 * 1000
+// How long a service that gave no answer at all is left alone (see markDown)
+const DOWN_TTL_MS = 2 * 60 * 1000
+// Time limits (ms) for the optional services only. nekoBT requests have none: they are essential, and big
+// responses (a long series' media info is several MB) take long on a slow connection.
+const SEADEX_TIMEOUT_MS = 10000
+const NYAA_FEED_TIMEOUT_MS = 10000
+const NYAA_PAGE_TIMEOUT_MS = 8000
+// Most distinct titles and group names put into one feed query
 const MAX_IMPORTED_TITLES = 6
 const MAX_IMPORTED_GROUPS = 8
-// Feed searches per lookup: each further round only asks for what the previous ones didn't return
-const MAX_FEED_ROUNDS = 3
 // More distinct episodes than this and the episode filter is left out of the feed query
 const MAX_FEED_EPISODES = 20
 // Nyaa RSS searches (SeaDex "grouped" search links) per search
@@ -279,6 +288,8 @@ class Provider {
     private bestCache: Map<number, SeaDexTr[]> = new Map()
     private levelByHash: Map<string, number> = new Map()
     private nekoIdByHash: Map<string, string> = new Map()
+    // Services that failed to answer during this search (the $store entry makes later searches skip them too)
+    private down: Set<string> = new Set()
 
     public getSettings(): AnimeProviderSettings {
         return {
@@ -494,6 +505,7 @@ class Provider {
             }
 
             const imported: ImportedTorrent[] = []
+            let recentImports = 0
             for (const t of fetched) {
                 if (!t.infohash) continue
                 const hash = t.infohash.toLowerCase()
@@ -505,13 +517,20 @@ class Provider {
                 episodesByHash.set(hash, (t.media_episode_ids || []).map(String))
                 results.push(this.toAnimeTorrent(t, nekoMedia, !freeText))
                 if (t.imported) {
+                    // Imported within a day of its Nyaa upload: the swarms haven't had time to drift apart, don't look it up
+                    const importedAt = this.toNumber(t.uploaded_at)
+                    const nyaaAt = this.toNumber(t.nyaa_upload_time)
+                    if (nyaaAt > 0 && importedAt > 0 && Math.abs(importedAt - nyaaAt) <= IMPORT_SKIP_MS) {
+                        recentImports++
+                        continue
+                    }
                     const primary = (t.groups || []).find(g => g.uploading_group)
                     imported.push({ hash, nyaaId: String(t.imported), title: t.title || "", group: primary?.display_name || "" })
                 }
             }
 
             // Imported torrents: bring seeders, leechers and downloads up to what Nyaa's swarm has
-            if (imported.length > 0) await this.applyNyaaStats(results, imported, freeText ? null : media)
+            if (imported.length > 0) await this.applyNyaaStats(results, imported)
 
             // Fallback mode has no episode mapping: select the episode from the torrent name instead
             if (nekoMedia && nekoMedia.fallback && wantedEp !== undefined && !opts.batch) {
@@ -841,6 +860,19 @@ class Provider {
         } catch (e) {
             return null
         }
+    }
+
+    // A service that failed to answer (timeout, connection error, blocked) is left alone for a few minutes, so a
+    // blocked Nyaa or a SeaDex outage costs one failed request instead of a wait on every request of every search
+    private isDown(service: string): boolean {
+        return this.down.has(service) || !!this.cacheGet<boolean>(`nekobt:down:${service}`)
+    }
+
+    private markDown(service: string) {
+        if (this.down.has(service)) return
+        this.down.add(service)
+        this.cacheSet(`nekobt:down:${service}`, true, DOWN_TTL_MS)
+        console.warn(`nekoBT: ${service} did not answer, leaving it alone for 2 minutes`)
     }
 
     private cacheRemove(key: string) {
@@ -1283,10 +1315,14 @@ class Provider {
         }
 
         const releases: SeaDexTr[] = []
+        if (this.isDown("SeaDex")) return releases
         try {
             const filter = encodeURIComponent(`alID=${anilistId}`)
             const url = `${SEADEX_URL}?page=1&perPage=1&filter=${filter}&skipTotal=1&expand=trs`
-            const data = await this.fetchJson<SeaDexRecordsResponse>(url)
+            const meta: { status?: number } = {}
+            const data = await this.fetchJson<SeaDexRecordsResponse>(url, 0, meta, SEADEX_TIMEOUT_MS)
+            // An error response (502, ...) is just retried by the next search. Only no answer at all counts as down.
+            if (!data && meta.status === undefined) this.markDown("SeaDex")
             for (const tr of data?.items?.[0]?.expand?.trs ?? []) {
                 if (!tr.infoHash || tr.infoHash === "<redacted>") continue
                 releases.push({
@@ -1357,10 +1393,13 @@ class Provider {
 
     // Reads seeders, leechers, downloads, size and upload time from a Nyaa torrent page
     private async scrapeNyaaPage(url: string): Promise<NyaaDetails | null> {
-        if (!/^https:\/\/nyaa\.si\//.test(url)) return null
+        if (!/^https:\/\/nyaa\.si\//.test(url) || this.isDown("Nyaa")) return null
         try {
-            const res = await fetch(url, { timeout: 5000 })
-            if (!res.ok) return null
+            const res = await fetch(url, { timeout: NYAA_PAGE_TIMEOUT_MS })
+            if (!res.ok) {
+                if (res.status === 429) this.markDown("Nyaa") // rate limited: stop asking for a while
+                return null
+            }
             const $ = LoadDoc(await res.text())
             const details: NyaaDetails = {
                 name: $("h3.panel-title").first().text().trim(),
@@ -1387,50 +1426,45 @@ class Provider {
             return details
         } catch (e) {
             console.warn("nekoBT: Failed to read Nyaa page: " + (e as Error).message)
+            this.markDown("Nyaa")
             return null
         }
     }
 
     // Seeders, leechers and downloads of torrents nekoBT imported from Nyaa, taken from Nyaa. nekoBT only counts peers
     // of its own tracker, and nekoBT's magnets list Nyaa's trackers too, so the larger number is used, not the sum.
-    //  - one torrent to look up: its Nyaa page is read
-    //  - several: ONE Nyaa feed search of the form ((title)|(title)) (Group|Group) returns most of them at once;
-    //    what the feed didn't contain is read page by page, a few at a time
-    private async applyNyaaStats(results: AnimeTorrent[], imported: ImportedTorrent[], media: Media | null) {
+    //  - exactly one torrent to look up: its Nyaa page is read
+    //  - several: up to 3 Nyaa feed searches of the form ((Title)|(Title)) ((Group)|(Group)) (episodes) (resolutions),
+    //    each one only for what the previous ones didn't return, then up to 3 of the leftovers are read from their pages
+    private async applyNyaaStats(results: AnimeTorrent[], imported: ImportedTorrent[]) {
         const detailsOf = (hash: string) => this.cacheGet<NyaaDetails>(`nekobt:nyaa:${hash}`)
-        const missing = imported.filter(i => !detailsOf(i.hash))
+        let remaining = imported.filter(i => !detailsOf(i.hash))
 
-        if (missing.length === 1) {
-            const d = await this.scrapeNyaaPage(`https://nyaa.si/view/${missing[0].nyaaId}`)
-            if (d) this.cacheSet(`nekobt:nyaa:${missing[0].hash}`, d, null)
-        } else if (missing.length > 1) {
-            // Round 1 asks for everything. A feed holds only the latest ~75 matches, so when some torrents are
-            // missing from it the query is repeated for just those: their groups, titles, episodes and resolutions,
-            // without what is already cached. Further rounds only use titles read from the torrent names.
-            let remaining = missing
-            for (let round = 0; round < MAX_FEED_ROUNDS && remaining.length > 1; round++) {
-                const url = this.buildImportedFeedUrl(remaining, round === 0 ? media : null)
-                if (!url || this.cacheGet<boolean>(`nekobt:rss:${url}`)) break
-                const items = await this.fetchNyaaRss(url)
-                if (items.size === 0) break
-                this.cacheSet(`nekobt:rss:${url}`, true, CACHE_TTL_MS)
-                let found = 0
-                for (const i of remaining) {
-                    const d = items.get(i.hash)
-                    if (d) {
-                        this.cacheSet(`nekobt:nyaa:${i.hash}`, d, null)
-                        found++
-                    }
+        let feeds = 0
+        while (remaining.length > 1 && feeds < MAX_FEED_ROUNDS) {
+            const url = this.buildImportedFeedUrl(remaining)
+            if (!url || this.cacheGet<boolean>(`nekobt:rss:${url}`)) break
+            feeds++
+            const items = await this.fetchNyaaRss(url)
+            if (items.size === 0) break
+            this.cacheSet(`nekobt:rss:${url}`, true, CACHE_TTL_MS)
+            let found = 0
+            for (const i of remaining) {
+                const d = items.get(i.hash)
+                if (d) {
+                    this.cacheSet(`nekobt:nyaa:${i.hash}`, d, null)
+                    found++
                 }
-                remaining = remaining.filter(i => !detailsOf(i.hash))
-                if (found === 0) break
             }
-            const left = missing.filter(i => !detailsOf(i.hash)).slice(0, MAX_IMPORTED_SCRAPES)
-            await this.mapLimited(left, NYAA_CONCURRENCY, async i => {
-                const d = await this.scrapeNyaaPage(`https://nyaa.si/view/${i.nyaaId}`)
-                if (d) this.cacheSet(`nekobt:nyaa:${i.hash}`, d, null)
-            })
+            remaining = remaining.filter(i => !detailsOf(i.hash))
+            if (found === 0) break
         }
+
+        // A few page reads. Anything beyond that keeps nekoBT's own numbers.
+        await this.mapLimited(remaining.slice(0, MAX_NYAA_PAGE_READS), NYAA_CONCURRENCY, async i => {
+            const d = await this.scrapeNyaaPage(`https://nyaa.si/view/${i.nyaaId}`)
+            if (d) this.cacheSet(`nekobt:nyaa:${i.hash}`, d, null)
+        })
 
         const byHash = new Map<string, AnimeTorrent>()
         for (const r of results) if (r.infoHash) byHash.set(r.infoHash, r)
@@ -1464,12 +1498,13 @@ class Provider {
         }
     }
 
-    // Builds the Nyaa feed search for imported torrents:
+    // Builds the Nyaa feed search for the given imported torrents:
     //   ((Title)|(Other Title)) ((Group)|(Group Two)) (01|E01|EP01|EP1|S01E01|...) (720|1080)
     // Blocks are joined by spaces, which is AND. Every title and group is wrapped in its own parentheses so names
-    // with spaces stay together. Titles: the anime's (smart search only) plus the ones read from the torrent names.
+    // with spaces stay together. Titles and groups are read from the torrent names themselves, which is all that is
+    // needed: the search is for these exact torrents, not for the anime.
     // The episode and resolution blocks are only added when EVERY torrent has one, otherwise they would hide it.
-    private buildImportedFeedUrl(list: ImportedTorrent[], media: Media | null): string {
+    private buildImportedFeedUrl(list: ImportedTorrent[]): string {
         // Characters with a meaning in Nyaa's search syntax would change the query. A hyphen inside a word
         // ("Erai-raws") stays, because Nyaa indexes it as part of the word.
         const clean = (s: string) => {
@@ -1482,30 +1517,40 @@ class Provider {
             }
             return out.replace(/\s+/g, " ").trim()
         }
-        const titles: string[] = []
+        // Names are ranked by how many torrents carry them, so the limited number of names that fit
+        // in one query covers as many torrents as possible
+        const tally = (map: Map<string, { text: string, n: number }>, text: string, weight: number) => {
+            const k = text.toLowerCase()
+            const cur = map.get(k)
+            if (cur) cur.n += weight
+            else map.set(k, { text, n: weight })
+        }
+        const rank = (map: Map<string, { text: string, n: number }>): string[] => {
+            const all = [...map.values()].map((v, idx) => ({ ...v, idx }))
+            all.sort((a, b) => b.n - a.n || a.idx - b.idx)
+            return all.map(v => v.text)
+        }
+        const titleTally = new Map<string, { text: string, n: number }>()
+        const groupTally = new Map<string, { text: string, n: number }>()
         const addTitle = (s?: string) => {
             const c = clean(s || "").split(" ").slice(0, 6).join(" ")
             // Titles in other scripts don't appear in torrent names
             if ((c.match(/[A-Za-z]/g) || []).length < 3) return
-            if (titles.every(t => t.toLowerCase() !== c.toLowerCase())) titles.push(c)
+            tally(titleTally, c, 1)
         }
-        const groups: string[] = []
         const addGroup = (s?: string) => {
             const c = clean(s || "")
-            if (c.length >= 2 && groups.every(g => g.toLowerCase() !== c.toLowerCase())) groups.push(c)
+            if (c.length >= 2) tally(groupTally, c, 1)
         }
 
-        if (media) {
-            addTitle(media.romajiTitle)
-            addTitle(media.englishTitle)
-            for (const s of media.synonyms || []) addTitle(s)
-        }
         const parsed = list.map(i => this.parseImported(i))
         parsed.forEach((pi, k) => {
             addTitle(pi.title)
             addGroup(pi.group)
             addGroup(list[k].group)
         })
+        const titles = rank(titleTally)
+        const groups = rank(groupTally)
         if (titles.length === 0) return ""
 
         const block = (items: string[]) => `(${items.map(x => `(${x})`).join("|")})`
@@ -1546,10 +1591,12 @@ class Provider {
 
     private async fetchNyaaRss(url: string): Promise<Map<string, NyaaDetails>> {
         const items = new Map<string, NyaaDetails>()
+        if (this.isDown("Nyaa")) return items
         try {
-            const res = await fetch(url, { timeout: 8000 })
+            const res = await fetch(url, { timeout: NYAA_FEED_TIMEOUT_MS })
             if (!res.ok) {
                 console.warn(`nekoBT: Nyaa RSS returned HTTP ${res.status}`)
+                if (res.status === 429) this.markDown("Nyaa") // rate limited: stop asking for a while
                 return items
             }
             const xml = await res.text()
@@ -1579,6 +1626,7 @@ class Provider {
             }
         } catch (e) {
             console.warn("nekoBT: Nyaa RSS failed: " + (e as Error).message)
+            this.markDown("Nyaa")
         }
         return items
     }
@@ -1857,16 +1905,16 @@ class Provider {
 
     // Fetches JSON. On HTTP 429 it waits as long as the server asks (JSON `retry_after` in seconds, or the Cloudflare
     // `Retry-After` header) and retries, as long as the wait is reasonable. $sleep blocks, so the wait is capped.
-    private async fetchJson<T>(url: string, attempt: number = 0, meta?: { status?: number }): Promise<T | null> {
+    private async fetchJson<T>(url: string, attempt: number = 0, meta?: { status?: number }, timeoutMs?: number): Promise<T | null> {
         try {
-            const res = await fetch(url)
+            const res = timeoutMs ? await fetch(url, { timeout: timeoutMs }) : await fetch(url)
             if (meta) meta.status = res.status
             if (res.status === 429) {
                 const waitMs = await this.getRetryDelayMs(res)
                 if (attempt < MAX_RATE_LIMIT_RETRIES && waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
                     console.warn(`nekoBT: Rate limited, retrying in ${Math.round(waitMs / 1000)}s`)
                     $sleep(waitMs)
-                    return await this.fetchJson<T>(url, attempt + 1, meta)
+                    return await this.fetchJson<T>(url, attempt + 1, meta, timeoutMs)
                 }
                 console.warn(`nekoBT: Rate limited (HTTP 429), not retrying (wait ${Math.round(waitMs / 1000)}s)`)
                 return null
