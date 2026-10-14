@@ -28,6 +28,10 @@ interface NekoBTTorrent {
     groups: NekoBTGroup[]
     batch: boolean
     level?: number | null
+    // Nyaa torrent id when nekoBT imported this torrent from Nyaa, else null
+    imported?: number | string | null
+    // Upload time on Nyaa (ms) for imported torrents
+    nyaa_upload_time?: number | string | null
     audio_lang?: string
     sub_lang?: string
     fsub_lang?: string
@@ -143,6 +147,14 @@ interface SeaDexTr {
     files?: { length: number, name: string }[]
 }
 
+// A nekoBT torrent that was imported from Nyaa. Its swarm on Nyaa is usually bigger than on nekoBT's tracker.
+interface ImportedTorrent {
+    hash: string
+    nyaaId: string
+    title: string
+    group: string
+}
+
 // Details scraped from a Nyaa page. Keyed by info hash, so they never go stale (only seeders drift).
 interface NyaaDetails {
     name: string
@@ -242,6 +254,15 @@ const NYAA_TRACKERS = [
 const MAX_SEADEX_SCRAPES = 12
 // Nyaa pages scraped at the same time (Nyaa rate limits bursts)
 const NYAA_CONCURRENCY = 3
+// Nyaa pages read per search for imported nekoBT torrents the feed didn't contain
+const MAX_IMPORTED_SCRAPES = 8
+// Most distinct titles and group names put into the Nyaa feed query for imported torrents
+const MAX_IMPORTED_TITLES = 6
+const MAX_IMPORTED_GROUPS = 8
+// Feed searches per lookup: each further round only asks for what the previous ones didn't return
+const MAX_FEED_ROUNDS = 3
+// More distinct episodes than this and the episode filter is left out of the feed query
+const MAX_FEED_EPISODES = 20
 // Nyaa RSS searches (SeaDex "grouped" search links) per search
 const MAX_NYAA_RSS = 5
 // How long a Nyaa feed counts as "already read" (releases found in it are kept until Seanime restarts)
@@ -472,6 +493,7 @@ class Provider {
                 }
             }
 
+            const imported: ImportedTorrent[] = []
             for (const t of fetched) {
                 if (!t.infohash) continue
                 const hash = t.infohash.toLowerCase()
@@ -482,7 +504,14 @@ class Provider {
                 this.levelByHash.set(hash, typeof t.level === "number" ? t.level : UNKNOWN_LEVEL)
                 episodesByHash.set(hash, (t.media_episode_ids || []).map(String))
                 results.push(this.toAnimeTorrent(t, nekoMedia, !freeText))
+                if (t.imported) {
+                    const primary = (t.groups || []).find(g => g.uploading_group)
+                    imported.push({ hash, nyaaId: String(t.imported), title: t.title || "", group: primary?.display_name || "" })
+                }
             }
+
+            // Imported torrents: bring seeders, leechers and downloads up to what Nyaa's swarm has
+            if (imported.length > 0) await this.applyNyaaStats(results, imported, freeText ? null : media)
 
             // Fallback mode has no episode mapping: select the episode from the torrent name instead
             if (nekoMedia && nekoMedia.fallback && wantedEp !== undefined && !opts.batch) {
@@ -646,6 +675,8 @@ class Provider {
             })),
             batch: t.batch,
             level: t.level,
+            imported: t.imported,
+            nyaa_upload_time: t.nyaa_upload_time,
             audio_lang: t.audio_lang,
             sub_lang: t.sub_lang,
             fsub_lang: t.fsub_lang,
@@ -1324,6 +1355,195 @@ class Provider {
         return out
     }
 
+    // Reads seeders, leechers, downloads, size and upload time from a Nyaa torrent page
+    private async scrapeNyaaPage(url: string): Promise<NyaaDetails | null> {
+        if (!/^https:\/\/nyaa\.si\//.test(url)) return null
+        try {
+            const res = await fetch(url, { timeout: 5000 })
+            if (!res.ok) return null
+            const $ = LoadDoc(await res.text())
+            const details: NyaaDetails = {
+                name: $("h3.panel-title").first().text().trim(),
+                seeders: -1,
+                leechers: 0,
+                downloads: 0,
+                formattedSize: "",
+            }
+            $(".panel-body .row div.col-md-1").each((i: number, el: any) => {
+                const label = el.text().trim()
+                const valueEl = el.next()
+                if (!valueEl) return
+                const value = valueEl.text().trim()
+                const n = parseInt(value, 10)
+                if (label === "Seeders:") details.seeders = isNaN(n) ? -1 : n
+                else if (label === "Leechers:") details.leechers = isNaN(n) ? 0 : n
+                else if (label === "Downloads:") details.downloads = isNaN(n) ? 0 : n
+                else if (label === "File size:") details.formattedSize = value
+                else if (label === "Date:") {
+                    const ts = parseInt(String(valueEl.attr("data-timestamp") || ""), 10)
+                    if (!isNaN(ts) && ts > 0) details.date = new Date(ts * 1000).toISOString()
+                }
+            })
+            return details
+        } catch (e) {
+            console.warn("nekoBT: Failed to read Nyaa page: " + (e as Error).message)
+            return null
+        }
+    }
+
+    // Seeders, leechers and downloads of torrents nekoBT imported from Nyaa, taken from Nyaa. nekoBT only counts peers
+    // of its own tracker, and nekoBT's magnets list Nyaa's trackers too, so the larger number is used, not the sum.
+    //  - one torrent to look up: its Nyaa page is read
+    //  - several: ONE Nyaa feed search of the form ((title)|(title)) (Group|Group) returns most of them at once;
+    //    what the feed didn't contain is read page by page, a few at a time
+    private async applyNyaaStats(results: AnimeTorrent[], imported: ImportedTorrent[], media: Media | null) {
+        const detailsOf = (hash: string) => this.cacheGet<NyaaDetails>(`nekobt:nyaa:${hash}`)
+        const missing = imported.filter(i => !detailsOf(i.hash))
+
+        if (missing.length === 1) {
+            const d = await this.scrapeNyaaPage(`https://nyaa.si/view/${missing[0].nyaaId}`)
+            if (d) this.cacheSet(`nekobt:nyaa:${missing[0].hash}`, d, null)
+        } else if (missing.length > 1) {
+            // Round 1 asks for everything. A feed holds only the latest ~75 matches, so when some torrents are
+            // missing from it the query is repeated for just those: their groups, titles, episodes and resolutions,
+            // without what is already cached. Further rounds only use titles read from the torrent names.
+            let remaining = missing
+            for (let round = 0; round < MAX_FEED_ROUNDS && remaining.length > 1; round++) {
+                const url = this.buildImportedFeedUrl(remaining, round === 0 ? media : null)
+                if (!url || this.cacheGet<boolean>(`nekobt:rss:${url}`)) break
+                const items = await this.fetchNyaaRss(url)
+                if (items.size === 0) break
+                this.cacheSet(`nekobt:rss:${url}`, true, CACHE_TTL_MS)
+                let found = 0
+                for (const i of remaining) {
+                    const d = items.get(i.hash)
+                    if (d) {
+                        this.cacheSet(`nekobt:nyaa:${i.hash}`, d, null)
+                        found++
+                    }
+                }
+                remaining = remaining.filter(i => !detailsOf(i.hash))
+                if (found === 0) break
+            }
+            const left = missing.filter(i => !detailsOf(i.hash)).slice(0, MAX_IMPORTED_SCRAPES)
+            await this.mapLimited(left, NYAA_CONCURRENCY, async i => {
+                const d = await this.scrapeNyaaPage(`https://nyaa.si/view/${i.nyaaId}`)
+                if (d) this.cacheSet(`nekobt:nyaa:${i.hash}`, d, null)
+            })
+        }
+
+        const byHash = new Map<string, AnimeTorrent>()
+        for (const r of results) if (r.infoHash) byHash.set(r.infoHash, r)
+        for (const i of imported) {
+            const d = detailsOf(i.hash)
+            const r = byHash.get(i.hash)
+            if (!d || !r) continue
+            r.seeders = Math.max(r.seeders, d.seeders)
+            r.leechers = Math.max(r.leechers, d.leechers)
+            r.downloadCount = Math.max(r.downloadCount, d.downloads)
+        }
+    }
+
+    // What a torrent name says, for the feed query. The title comes from habari, so it matches the name by construction.
+    private parseImported(i: ImportedTorrent): { title: string, group: string, season: number, episode: number, resolution: string } {
+        let h: any = null
+        try {
+            h = $habari.parse(i.title)
+        } catch (e) {
+        }
+        const num = (v: unknown): number[] => (Array.isArray(v) ? v : []).map(x => parseInt(String(x), 10)).filter(n => !isNaN(n) && n >= 0)
+        const eps = num(h?.episode_number)
+        const seasons = num(h?.season_number)
+        const res = this.detectResolution(i.title).replace(/\D/g, "")
+        return {
+            title: String(h?.title || ""),
+            group: String(h?.release_group || ""),
+            season: seasons.length === 1 ? seasons[0] : 1,
+            episode: eps.length === 1 ? eps[0] : -1, // a batch (or no number at all) can't be narrowed by episode
+            resolution: res,
+        }
+    }
+
+    // Builds the Nyaa feed search for imported torrents:
+    //   ((Title)|(Other Title)) ((Group)|(Group Two)) (01|E01|EP01|EP1|S01E01|...) (720|1080)
+    // Blocks are joined by spaces, which is AND. Every title and group is wrapped in its own parentheses so names
+    // with spaces stay together. Titles: the anime's (smart search only) plus the ones read from the torrent names.
+    // The episode and resolution blocks are only added when EVERY torrent has one, otherwise they would hide it.
+    private buildImportedFeedUrl(list: ImportedTorrent[], media: Media | null): string {
+        // Characters with a meaning in Nyaa's search syntax would change the query. A hyphen inside a word
+        // ("Erai-raws") stays, because Nyaa indexes it as part of the word.
+        const clean = (s: string) => {
+            const t = s.replace(/[+|"()*~!&:.,'\u2019\[\]{}_]/g, " ")
+            let out = ""
+            for (let k = 0; k < t.length; k++) {
+                const c = t[k]
+                const inWord = c === "-" && /[A-Za-z0-9]/.test(t[k - 1] || "") && /[A-Za-z0-9]/.test(t[k + 1] || "")
+                out += c === "-" && !inWord ? " " : c
+            }
+            return out.replace(/\s+/g, " ").trim()
+        }
+        const titles: string[] = []
+        const addTitle = (s?: string) => {
+            const c = clean(s || "").split(" ").slice(0, 6).join(" ")
+            // Titles in other scripts don't appear in torrent names
+            if ((c.match(/[A-Za-z]/g) || []).length < 3) return
+            if (titles.every(t => t.toLowerCase() !== c.toLowerCase())) titles.push(c)
+        }
+        const groups: string[] = []
+        const addGroup = (s?: string) => {
+            const c = clean(s || "")
+            if (c.length >= 2 && groups.every(g => g.toLowerCase() !== c.toLowerCase())) groups.push(c)
+        }
+
+        if (media) {
+            addTitle(media.romajiTitle)
+            addTitle(media.englishTitle)
+            for (const s of media.synonyms || []) addTitle(s)
+        }
+        const parsed = list.map(i => this.parseImported(i))
+        parsed.forEach((pi, k) => {
+            addTitle(pi.title)
+            addGroup(pi.group)
+            addGroup(list[k].group)
+        })
+        if (titles.length === 0) return ""
+
+        const block = (items: string[]) => `(${items.map(x => `(${x})`).join("|")})`
+        const parts: string[] = [block(titles.slice(0, MAX_IMPORTED_TITLES))]
+        if (groups.length > 0) parts.push(block(groups.slice(0, MAX_IMPORTED_GROUPS)))
+
+        // Episode numbers, in the spellings names use
+        if (parsed.every(pi => pi.episode >= 0)) {
+            const pairs = new Map<string, { season: number, episode: number }>()
+            for (const pi of parsed) pairs.set(`${pi.season}x${pi.episode}`, { season: pi.season, episode: pi.episode })
+            if (pairs.size <= MAX_FEED_EPISODES) {
+                const variants: string[] = []
+                const add = (v: string) => {
+                    if (variants.indexOf(v) === -1) variants.push(v)
+                }
+                for (const { season, episode } of pairs.values()) {
+                    const ee = episode < 10 ? `0${episode}` : String(episode)
+                    const ss = season < 10 ? `0${season}` : String(season)
+                    add(ee)
+                    add(`E${ee}`)
+                    add(`EP${ee}`)
+                    add(`EP${episode}`)
+                    add(`S${ss}E${ee}`)
+                }
+                parts.push(`(${variants.join("|")})`)
+            }
+        }
+
+        // Resolutions
+        if (parsed.every(pi => pi.resolution !== "")) {
+            const resolutions: string[] = []
+            for (const pi of parsed) if (resolutions.indexOf(pi.resolution) === -1) resolutions.push(pi.resolution)
+            parts.push(`(${resolutions.join("|")})`)
+        }
+
+        return `https://nyaa.si/?page=rss&q=${encodeURIComponent(parts.join(" "))}&c=0_0&f=0`
+    }
+
     private async fetchNyaaRss(url: string): Promise<Map<string, NyaaDetails>> {
         const items = new Map<string, NyaaDetails>()
         try {
@@ -1424,32 +1644,15 @@ class Provider {
             formattedSize = details.formattedSize
             uploaded = details.date
         } else if (scrape) {
-            try {
-                const res = await fetch(tr.url as string, { timeout: 5000 })
-                if (res.ok) {
-                    const $ = LoadDoc(await res.text())
-                    const pageTitle = $("h3.panel-title").first().text().trim()
-                    if (pageTitle) name = pageTitle
-                    $(".panel-body .row div.col-md-1").each((i: number, el: any) => {
-                        const label = el.text().trim()
-                        const valueEl = el.next()
-                        if (!valueEl) return
-                        const value = valueEl.text().trim()
-                        const n = parseInt(value, 10)
-                        if (label === "Seeders:") seeders = isNaN(n) ? -1 : n
-                        else if (label === "Leechers:") leechers = isNaN(n) ? 0 : n
-                        else if (label === "Downloads:") downloads = isNaN(n) ? 0 : n
-                        else if (label === "File size:") formattedSize = value
-                        else if (label === "Date:") {
-                            const ts = parseInt(String(valueEl.attr("data-timestamp") || ""), 10)
-                            if (!isNaN(ts) && ts > 0) uploaded = new Date(ts * 1000).toISOString()
-                        }
-                    })
-                    // Kept until Seanime restarts: the page belongs to an immutable info hash
-                    this.cacheSet(detailsKey, { name: pageTitle || "", seeders, leechers, downloads, formattedSize, date: uploaded }, null)
-                }
-            } catch (e) {
-                console.warn("nekoBT: Failed to scrape Nyaa page for SeaDex release: " + (e as Error).message)
+            const scraped = await this.scrapeNyaaPage(tr.url as string)
+            if (scraped) {
+                this.cacheSet(detailsKey, scraped, null) // kept until Seanime restarts: the page belongs to an immutable info hash
+                if (scraped.name) name = scraped.name
+                seeders = scraped.seeders
+                leechers = scraped.leechers
+                downloads = scraped.downloads
+                formattedSize = scraped.formattedSize
+                uploaded = scraped.date
             }
         }
 
@@ -1714,7 +1917,9 @@ class Provider {
 
     // `scoped`: the search was limited to this anime, so every result belongs to it
     private toAnimeTorrent(t: NekoBTTorrent, nekoMedia: NekoMediaInfo | null, scoped: boolean = false): AnimeTorrent {
-        const ts = this.toNumber(t.uploaded_at)
+        // Imported torrents keep their original Nyaa upload time, uploaded_at is when nekoBT imported them
+        const nyaaTs = this.toNumber(t.nyaa_upload_time)
+        const ts = nyaaTs > 0 ? nyaaTs : this.toNumber(t.uploaded_at)
         const date = ts > 0 ? new Date(ts).toISOString() : new Date().toISOString()
 
         const title = (t.title || "Unknown") + this.formatSubtitleLangs(t)
