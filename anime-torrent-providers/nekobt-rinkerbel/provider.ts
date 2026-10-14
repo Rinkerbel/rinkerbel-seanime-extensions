@@ -288,6 +288,8 @@ class Provider {
     private bestCache: Map<number, SeaDexTr[]> = new Map()
     private levelByHash: Map<string, number> = new Map()
     private nekoIdByHash: Map<string, string> = new Map()
+    // Search results already fetched during this search (the batches fallback repeats the same request)
+    private searchMemo: Map<string, NekoBTTorrent[]> = new Map()
     // Services that failed to answer during this search (the $store entry makes later searches skip them too)
     private down: Set<string> = new Set()
 
@@ -445,13 +447,12 @@ class Provider {
         includeBatches: boolean,
     ): Promise<{ torrents: AnimeTorrent[], regularCount: number }> {
         const results: AnimeTorrent[] = []
-        // SeaDex best releases shown even though they don't match the Batches toggle
-        const injected = new Set<string>()
         const seen = new Set<string>()
         // nekoBT episode ids per info hash, for the per-episode fansub preference
         const episodesByHash = new Map<string, string[]>()
 
         // ---- nekoBT
+        let episodeSpecific = false
         const query = (opts.query || "").trim()
         const freeText = !!opts.freeText && query.length > 0
         if (nekoMedia || freeText) {
@@ -481,11 +482,16 @@ class Provider {
                     if (single) {
                         params.push(`episode_ids=${single.id}`)
                         params.push("episode_match_any=true")
+                        episodeSpecific = true
                     }
                 }
 
+                // Batch searches ask for batches only, otherwise every single episode of the anime would come back.
+                // With one episode id there is no such problem: the request returns every torrent containing that
+                // episode, batches included, and they are sorted out below. The request is then the same with batches
+                // on or off, and for the "no single episodes, show batches" retry.
                 if (opts.batch === true) params.push("batch=true")
-                else if (wantedEp !== undefined && !includeBatches) params.push("batch=false")
+                else if (wantedEp !== undefined && !includeBatches && !episodeSpecific) params.push("batch=false")
             }
 
             if (query) params.push(`query=${encodeURIComponent(query)}`)
@@ -575,11 +581,7 @@ class Provider {
                 if (seen.has(tr.infoHash.toLowerCase())) return false
                 const isBatch = this.isSeaDexBatch(tr)
                 if (normallyShown(tr, isBatch)) return true
-                if (alwaysShownBest(tr, isBatch)) {
-                    injected.add(tr.infoHash.toLowerCase())
-                    return true
-                }
-                return false
+                return alwaysShownBest(tr, isBatch)
             })
             // One Nyaa RSS request per SeaDex search link covers many releases; only what's left is scraped
             await this.prefetchNyaaDetails(wanted, seaDex)
@@ -604,9 +606,19 @@ class Provider {
             }
         }
 
+        // Batches off: hide the batches the episode search returned, except a SeaDex best release (alternatives
+        // only show with batches on)
+        if (opts.batch !== true && wantedEp !== undefined && !includeBatches) {
+            for (let i = results.length - 1; i >= 0; i--) {
+                const r = results[i]
+                if (r.isBatch && !(r.infoHash && isBestByHash.get(r.infoHash) === true)) results.splice(i, 1)
+            }
+        }
+
         const filtered = await this.filterByResolution(results, opts.resolution)
         const torrents = this.applyFansubPreference(filtered, episodesByHash)
-        const regularCount = torrents.filter(t => !t.infoHash || !injected.has(t.infoHash)).length
+        // What counts as "a single episode was found" for the batches fallback: the kept SeaDex best batches don't
+        const regularCount = torrents.filter(t => !t.isBatch).length
         return { torrents, regularCount }
     }
 
@@ -648,6 +660,8 @@ class Provider {
     private async fetchAllPages(params: string[]): Promise<NekoBTTorrent[]> {
         // The key is the whole request, so any change to the query or your filters is a different entry
         const cacheKey = `nekobt:search:${params.join("&")}`
+        const memo = this.searchMemo.get(cacheKey)
+        if (memo) return memo
         const stored = this.cacheGet<NekoBTTorrent[]>(cacheKey)
         if (stored) {
             console.log("nekoBT: Using cached nekoBT search results")
@@ -668,7 +682,10 @@ class Provider {
         }
 
         // Only complete result sets are kept (never after a failed request), and only the fields we use
-        if (complete) this.cacheSet(cacheKey, all.map(t => this.slimTorrent(t)), SEARCH_TTL_MS)
+        if (complete) {
+            this.searchMemo.set(cacheKey, all)
+            this.cacheSet(cacheKey, all.map(t => this.slimTorrent(t)), SEARCH_TTL_MS)
+        }
         return all
     }
 
