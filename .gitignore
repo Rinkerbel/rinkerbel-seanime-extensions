@@ -1,4 +1,2 @@
-anime-torrent-providers/nekobt-rinkerbel/nekobt-rinkerbel-dev.json
-anime-torrent-providers/nekobt-rinkerbel/tsconfig.json
-anime-torrent-providers/nekobt-rinkerbel/build-dev-manifest.js
-anime-torrent-providers/nekobt-rinkerbel/build-manifest.js
+*-dev.json
+_*
