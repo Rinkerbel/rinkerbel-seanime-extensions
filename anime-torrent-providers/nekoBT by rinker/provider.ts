@@ -1,5 +1,5 @@
-/// <reference path="./anime-torrent-provider.d.ts" />
-/// <reference path="./core.d.ts" />
+/// <reference path="../../typings/anime-torrent-provider.d.ts" />
+/// <reference path="../../typings/core.d.ts" />
 
 
 //+ --------------------------------------------------------------------------------------------------
@@ -297,7 +297,7 @@ class Provider {
         return {
             type: "main",
             canSmartSearch: true,
-            smartSearchFilters: ["batch", "episodeNumber", "resolution", "query"],
+            smartSearchFilters: ["batch", "episodeNumber", "resolution", "query", "bestReleases"],
             supportsAdult: false,
         }
     }
@@ -331,6 +331,7 @@ class Provider {
                 episodeNumber: opts.batch ? undefined : opts.episodeNumber,
                 knownEpisode: opts.episodeNumber,
                 resolution: opts.resolution,
+                bestReleases: !!opts.bestReleases,
             })
         } catch (error) {
             console.error("nekoBT: Error in smart search: " + (error as Error).message)
@@ -405,6 +406,8 @@ class Provider {
             // The episode Seanime has selected, also in batch mode (used to always show SeaDex best releases)
             knownEpisode?: number
             resolution?: string
+            // The "Best releases" toggle of Seanime's smart search: for each episode, only the highest sub level
+            bestReleases?: boolean
             // Simple search: search nekoBT by the query alone, like Nyaa, without restricting to this anime's episodes
             freeText?: boolean
         },
@@ -442,7 +445,7 @@ class Provider {
         media: Media,
         nekoMedia: NekoMediaInfo | null,
         seaDex: SeaDexTr[],
-        opts: { query?: string, batch?: boolean, resolution?: string, knownEpisode?: number, freeText?: boolean },
+        opts: { query?: string, batch?: boolean, resolution?: string, knownEpisode?: number, freeText?: boolean, bestReleases?: boolean },
         wantedEp: number | undefined,
         includeBatches: boolean,
     ): Promise<{ torrents: AnimeTorrent[], regularCount: number }> {
@@ -616,19 +619,19 @@ class Provider {
         }
 
         const filtered = await this.filterByResolution(results, opts.resolution)
-        const torrents = this.applyFansubPreference(filtered, episodesByHash)
+        const torrents = this.applyFansubPreference(filtered, episodesByHash, !!opts.bestReleases)
         // What counts as "a single episode was found" for the batches fallback: the kept SeaDex best batches don't
         const regularCount = torrents.filter(t => !t.isBatch).length
         return { torrents, regularCount }
     }
 
-    // "Prefer fansubs", decided per episode: for every episode, only torrents with the highest sub level available
+    // The "Best releases" toggle, decided per episode: for every episode, only torrents with the highest sub level available
     // for that episode are kept (L3, else L2, else L1; if the best is L0 or no subs, everything for that episode stays).
     // Torrents without a sub level count as the lowest level, so they're only kept when nothing better exists.
     // A torrent stays if it is the best option for at least one episode it contains, so a lower-level batch that
     // covers episodes nobody else has is kept. SeaDex releases are never removed and don't take part.
-    private applyFansubPreference(results: AnimeTorrent[], episodesByHash: Map<string, string[]>): AnimeTorrent[] {
-        if (this.getPref("preferFansubs").toLowerCase() !== "true") return results
+    private applyFansubPreference(results: AnimeTorrent[], episodesByHash: Map<string, string[]>, enabled: boolean): AnimeTorrent[] {
+        if (!enabled) return results
         const levelOf = (r: AnimeTorrent) => (r.infoHash ? this.levelByHash.get(r.infoHash) : undefined)
         const episodesOf = (r: AnimeTorrent) => {
             const eps = r.infoHash ? episodesByHash.get(r.infoHash) : undefined

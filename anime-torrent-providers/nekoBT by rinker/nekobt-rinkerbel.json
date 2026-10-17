@@ -3,7 +3,7 @@
   "name": "nekoBT by rinker",
   "description": "nekoBT torrent search provider for Seanime. Resolves media via the nekoBT API, supports configurable filters, and tags best releases using SeaDex (releases.moe).",
   "manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/anime-torrent-providers/nekobt-rinkerbel/nekobt-rinkerbel.json",
-  "version": "1.6.9",
+  "version": "1.6.10",
   "author": "bruuhim, rinkerbel",
   "type": "anime-torrent-provider",
   "icon": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/assets/nekobt.png",
@@ -33,12 +33,6 @@
         "label": "Add Seadex torrents to results",
         "type": "switch",
         "default": "true"
-      },
-      {
-        "name": "preferFansubs",
-        "label": "Only show the highest sub level available",
-        "type": "switch",
-        "default": "false"
       },
       {
         "name": "subtitleLangs",
