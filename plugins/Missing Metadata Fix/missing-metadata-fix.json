@@ -1,0 +1,129 @@
+{
+	"id": "missing-metadata-fix",
+	"name": "Missing Metadata Fix",
+	"version": "2.0.0",
+	"manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/missing-metadata-fix.json",
+	"language": "javascript",
+	"type": "plugin",
+	"description": "Fix missing metadata of anime in your AniList collection.",
+	"author": "nnotwen, rinkerbel",
+	"icon": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/icon.png",
+	"website": "",
+	"lang": "en",
+	"payloadURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/provider.min.js",
+	"plugin": {
+		"version": "1",
+		"permissions": {
+			"scopes": [
+				"storage",
+				"anilist"
+			],
+			"allow": {
+				"networkAccess": {
+					"allowedDomains": [
+						"api.themoviedb.org",
+						"api.ani.zip",
+						"animeapi.my.id",
+						"animap.id",
+						"proxy.ani.zip"
+					],
+					"reasoning": "Used for the TMDB API, TMDB/AniDB mappings (ani.zip, AnimeAPI, animap.id) and AniDB episode lists (proxy.ani.zip)"
+				}
+			}
+		}
+	},
+	"userConfig": {
+		"requiresConfig": false,
+		"version": 1,
+		"fields": [
+			{
+				"name": "tmdb-api",
+				"label": "TMDB API KEY",
+				"type": "text",
+				"default": ""
+			},
+			{
+				"name": "image-size",
+				"label": "TMDB Image Sizes",
+				"type": "select",
+				"default": "w300",
+				"options": [
+					{
+						"label": "92 pixels wide",
+						"value": "w92"
+					},
+					{
+						"label": "154 pixels wide",
+						"value": "w154"
+					},
+					{
+						"label": "185 pixels wide",
+						"value": "w185"
+					},
+					{
+						"label": "300 pixels wide",
+						"value": "w300"
+					},
+					{
+						"label": "342 pixels wide",
+						"value": "w342"
+					},
+					{
+						"label": "500 pixels wide",
+						"value": "w500"
+					},
+					{
+						"label": "780 pixels wide",
+						"value": "w780"
+					},
+					{
+						"label": "1280 pixels wide (720p)",
+						"value": "w1280"
+					},
+					{
+						"label": "1920 pixels wide (1080p)",
+						"value": "w1920"
+					},
+					{
+						"label": "Original",
+						"value": "original"
+					}
+				]
+			},
+			{
+				"name": "tmdb-thumbnails",
+				"label": "Replace episode thumbnails with TMDB stills",
+				"type": "switch",
+				"default": "false"
+			},
+			{
+				"name": "tmdb-auto-refresh",
+				"label": "Automatically refresh custom metadata from TMDB",
+				"type": "switch",
+				"default": "false"
+			},
+			{
+				"name": "tmdb-fill-missing",
+				"label": "Fill in episode metadata from TMDB when Seanime has none",
+				"type": "switch",
+				"default": "false"
+			},
+			{
+				"name": "anidb-lookup",
+				"label": "Look up missing AniDB IDs (checked against AniDB's air dates)",
+				"type": "switch",
+				"default": "true"
+			},
+			{
+				"name": "background-matching",
+				"label": "Background matching (anime not on your Continue Watching are matched when you open their page)",
+				"type": "select",
+				"default": "watching",
+				"options": [
+					{ "label": "Continue Watching only", "value": "watching" },
+					{ "label": "Everything", "value": "all" }
+				]
+			}
+		]
+	}
+}
