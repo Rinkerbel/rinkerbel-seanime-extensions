@@ -27,7 +27,7 @@
 		}
 	},
 	"userConfig": {
-		"requiresConfig": false,
+		"requiresConfig": true,
 		"version": 1,
 		"fields": [
 			{
