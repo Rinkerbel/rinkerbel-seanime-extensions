@@ -254,6 +254,12 @@ declare namespace CEM {
 			tmdbType?: "tv" | "movie";
 			tmdbSeason?: number;
 			tmdbEpisode?: number;
+			/** The AniDB anime and episode ("12", "S3") this episode is, checked against AniDB when saved */
+			anidbId?: number;
+			anidbEpisode?: string;
+			/** That AniDB episode's ID and data, as AniDB had them when saved (the metadata hook can't fetch) */
+			anidbEid?: number;
+			anidb?: { title?: string; airDate?: string; length?: number; summary?: string };
 		}[];
 	}
 
@@ -308,6 +314,8 @@ declare namespace CEM {
 		byTitle?: boolean;
 		/** Matched by the show's exact title and episode count, its dates within a week (TMDB a few days off). */
 		byName?: boolean;
+		/** Matched with AniDB's air dates (or the list dated from them): it can't vouch for the AniDB match in turn. */
+		byAnidb?: boolean;
 		/** The TMDB ID came from a related anime or a title search, not this anime's own IDs. */
 		borrowed?: boolean;
 		/** Where the TMDB ID came from, for the status line. */
@@ -317,6 +325,8 @@ declare namespace CEM {
 		episodes?: Record<string, { title?: string; overview?: string; airDate?: string; length?: number; aired?: boolean }>;
 		/** Failed since then (kept while it keeps failing): retried daily for a week, weekly after. */
 		failedSince?: number;
+		/** What the last refresh tried, in order, for the status line's hover panel. */
+		steps?: string[];
 		refreshedAt: number;
 		lastSeenAt: number;
 	}
@@ -363,8 +373,14 @@ declare namespace CEM {
 		specials?: boolean;
 		from?: string;
 		reason?: string;
-		/** "none": how many of TMDB's air dates it had; looked up again once TMDB has more (they're tried on their own too). */
+		/** How many of TMDB's air dates it had; checked again once TMDB has more (they're tried on their own too). */
 		tmdbPoints?: number;
+		/** Verified only with the TMDB match's air dates or titles: it can't vouch for that match in turn. */
+		byTmdb?: boolean;
+		/** Found through a related anime, with this many main episodes of its own. */
+		related?: number;
+		/** What the last lookup tried, in order, for the status line's hover panel. */
+		steps?: string[];
 		checkedAt: number;
 	}
 

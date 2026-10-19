@@ -1,7 +1,7 @@
 {
 	"id": "missing-metadata-fix",
 	"name": "Missing Metadata Fix",
-	"version": "2.0.1",
+	"version": "2.1.0",
 	"manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/missing-metadata-fix.json",
 	"language": "javascript",
 	"type": "plugin",
@@ -20,7 +20,14 @@
 			],
 			"allow": {
 				"networkAccess": {
-					"allowedDomains": ["api.themoviedb.org", "api.ani.zip", "proxy.ani.zip", "animeapi.my.id", "animap.id", "anime.clap.ing"],
+					"allowedDomains": [
+						"api.themoviedb.org",
+						"api.ani.zip",
+						"animeapi.my.id",
+						"animap.id",
+						"proxy.ani.zip",
+						"anime.clap.ing"
+					],
 					"reasoning": "api.themoviedb.org: finds each anime on TMDB and reads its episode stills, titles, overviews, air dates and runtimes. api.ani.zip, animeapi.my.id and animap.id: look up an anime's TMDB and AniDB IDs. proxy.ani.zip: reads AniDB's episode lists (air dates, English titles, summaries) to check an AniDB ID and fill in missing episode data. anime.clap.ing: checks whether Animap, Seanime's own metadata source, has an entry for an anime, the way Seanime asks it."
 				}
 			}
@@ -32,7 +39,7 @@
 		"fields": [
 			{
 				"name": "tmdb-api",
-				"label": "TMDB API Read Access Token (or API key)",
+				"label": "TMDB API Read Access Token",
 				"type": "text",
 				"default": ""
 			},
@@ -78,7 +85,7 @@
 				"name": "tmdb-fill-missing",
 				"label": "Fill in episode metadata from TMDB when Seanime has none",
 				"type": "switch",
-				"default": "true"
+				"default": "false"
 			},
 			{
 				"name": "anidb-lookup",
