@@ -2,12 +2,20 @@
 
 declare namespace CEM {
 	interface SharedDatabase {
-		records: () => Record<number, CustomEpisodeEntry>;
 		get: (mediaId: number) => CustomEpisodeEntry;
-		has: (mediaId: number) => boolean;
-		save: (mediaId: number, data: CustomEpisodeMetadata) => CustomEpisodeEntry;
-		delete: (mediaId: number, aniDBEpisode: string) => boolean;
+		save: (mediaId: number, data: CustomEpisodeMetadata) => void;
+		delete: (mediaId: number, aniDBEpisode: string) => void;
 	}
+
+	/** A per-anime record store kept on disk, shared between the plugin's contexts (see keyedStore). */
+	interface KeyedStore<T> {
+		all: () => Record<number, T>;
+		get: (mediaId: number) => T | undefined;
+		set: (mediaId: number, value: T | null) => void;
+	}
+	type AnimapStore = KeyedStore<AnimapStatus>;
+	type ThumbnailStore = KeyedStore<ThumbnailRecord>;
+	type AnidbStore = KeyedStore<AnidbMatch>;
 
 	type CustomEpisodeMetadata = Partial<
 		Omit<$app.Metadata_EpisodeMetadata, "anidbId" | "tvdbId" | "episodeNumber" | "seasonNumber" | "absoluteEpisodeNumber" | "anidbEid">
@@ -16,7 +24,6 @@ declare namespace CEM {
 
 	interface CustomEpisodeEntry {
 		mediaId: number;
-		mediaTitle?: string;
 		data: Record<string, CustomEpisodeMetadata>;
 	}
 
@@ -34,6 +41,11 @@ declare namespace CEM {
 			popularity: number;
 			poster_path: string;
 			first_air_date: string;
+			/** Movies' */
+			title?: string;
+			release_date?: string;
+			/** Multi search only */
+			media_type?: "tv" | "movie" | "person";
 			softcore: boolean;
 			name: string;
 			vote_average: number;
@@ -217,49 +229,32 @@ declare namespace CEM {
 	interface TMDBOverrides {
 		mediaId: number;
 		tmdbId?: number;
+		/** The TMDB ID's type, when it's known (entered as "movie/123", or found as one): TV and movie IDs overlap. */
+		tmdbType?: "tv" | "movie";
 		tmdbSeason?: number;
 		/** Several TMDB seasons read as one run of episodes (tmdbSeason is the first). Offset counts across all of them. */
 		tmdbSeasons?: number[];
+		/**
+		 * TMDB episode ranges read as one run, in TMDB's order ("S1E2-S1E4, S1E7"), then every later episode (tmdbSeason is
+		 * the first range's). A range without an end episode runs to the end of its last season. Offset counts across it.
+		 */
+		tmdbRanges?: TMDBRange[];
 		/** Added to the AniDB episode number to get the TMDB episode number (main episodes only). */
 		tmdbOffset?: number;
 		/** Real AniDB ID, for anime Seanime has no metadata for. */
 		anidbId?: number;
 		/** Added to this anime's episode number to get the AniDB main episode number (e.g. a second AniList part). */
 		anidbOffset?: number;
-		/** Skip this anime when automatically refreshing custom metadata from TMDB. */
-		excludeAuto?: boolean;
+		/** No tray badge or Overrides dot for this anime's missing TMDB match or AniDB ID. */
+		ignoreWarnings?: boolean;
 		episodeOverrides: {
 			aniDBEpisode?: string;
 			tmdbId?: number;
+			/** "movie": the episode is a TMDB movie (entered as m123), e.g. an anime whose episodes are separate movies. */
+			tmdbType?: "tv" | "movie";
 			tmdbSeason?: number;
 			tmdbEpisode?: number;
 		}[];
-	}
-
-	interface V1Entry {
-		mediaId: number;
-		mediaTitle?: string;
-		// can exist in local library and torrent streaming
-		main: Partial<Record<number, V1CustomEpisodeMetadata>>;
-		// can only exist in local library
-		special: Partial<Record<number, V1CustomEpisodeMetadata>>;
-		nc: Partial<Record<number, V1CustomEpisodeMetadata>>;
-	}
-
-	interface V1CustomEpisodeMetadata {
-		// For tracking
-		mediaId: number;
-		type: $app.Anime_LocalFileType;
-		episodeNumber: number;
-		// For partial tracking
-		aniDBEpisode?: string;
-		// For display
-		displayTitle?: string;
-		episodeTitle?: string;
-		length?: number;
-		airDate?: $app.AL_FuzzyDateInput;
-		overview?: string;
-		image?: string;
 	}
 
 	/** Whether Animap can serve an anime, decided by the UI context and read by the metadata hooks. */
@@ -272,14 +267,15 @@ declare namespace CEM {
 		checkedAt?: number;
 		/** When Animap was first found to have no entry for this anime. */
 		since?: number;
-		/** AniDB ID from ani.zip, 0 when it has none. */
-		anidbId?: number;
 	}
 
-	interface AnimapStore {
-		all: () => Record<number, AnimapStatus>;
-		get: (mediaId: number) => AnimapStatus | undefined;
-		set: (mediaId: number, status: AnimapStatus | null) => void;
+	/** One range of the Season field ("S1E2-S1E4"), in TMDB's order. */
+	interface TMDBRange {
+		season: number;
+		episode: number;
+		toSeason: number;
+		/** Missing: to the end of toSeason */
+		toEpisode?: number;
 	}
 
 	/** Where an AniDB episode lives on TMDB. Movies have no season or episode. */
@@ -287,6 +283,8 @@ declare namespace CEM {
 		tmdbId: number;
 		season?: number;
 		episode?: number;
+		/** A TMDB movie as one episode (an episode override of m123) */
+		movie?: boolean;
 	}
 
 	/** How an anime maps onto TMDB, and the stills found for it. Refreshed automatically, kept on disk. */
@@ -302,32 +300,50 @@ declare namespace CEM {
 		/** Season and offset used for episodes that aren't dated yet. */
 		fallback?: { season: number; offset: number; seasons?: number[] };
 		images: Record<string, string>;
-		/** Refresh again sooner: the anime is airing, or a recent episode has no still yet. */
-		active?: boolean;
 		/** When the next refresh is due. Worked out from the airing schedule. */
 		nextCheckAt?: number;
+		/** Matched by episode count: the air dates didn't line up (e.g. TMDB lists a streaming release). */
+		byCount?: boolean;
+		/** Matched by episode title: the air dates didn't line up (e.g. TMDB lists wrong dates). */
+		byTitle?: boolean;
+		/** Matched by the show's exact title and episode count, its dates within a week (TMDB a few days off). */
+		byName?: boolean;
+		/** The TMDB ID came from a related anime or a title search, not this anime's own IDs. */
+		borrowed?: boolean;
 		/** Where the TMDB ID came from, for the status line. */
 		idFrom?: string;
-		/** Its own sources found nothing and related anime weren't checked in the background: matched on its page. */
-		needsVisit?: boolean;
 		/** TMDB episode metadata kept in the background for anime Seanime has no metadata for. */
-		episodes?: Record<string, { title?: string; overview?: string; airDate?: string; length?: number }>;
+		/** aired: aired by AniList although TMDB dates it later. */
+		episodes?: Record<string, { title?: string; overview?: string; airDate?: string; length?: number; aired?: boolean }>;
+		/** Failed since then (kept while it keeps failing): retried daily for a week, weekly after. */
+		failedSince?: number;
 		refreshedAt: number;
 		lastSeenAt: number;
 	}
 
-	interface ThumbnailStore {
-		all: () => Record<number, ThumbnailRecord>;
-		get: (mediaId: number) => ThumbnailRecord | undefined;
-		set: (mediaId: number, record: ThumbnailRecord | null) => void;
+	/** The episode list supplied for an anime Animap has no entry for. */
+	interface FallbackSupply {
+		count: number;
+		aid?: number;
+		eids: Record<string, number>;
+		/** AniDB's air dates for the supplied episodes */
+		airDates?: Record<string, string>;
 	}
+
+	/** An AniDB episode: English title only, summary when AniDB has one. */
+	interface AnidbEpisode { n: number; eid: number; airDate?: string; length?: number; title?: string; summary?: string }
 
 	/** An AniDB anime's main episodes, from AniDB's HTTP API via proxy.ani.zip. */
 	interface AnidbAnime {
 		aid: number;
 		/** Main episodes planned (AniDB's episodecount), 0 when unknown. */
 		episodeCount: number;
-		main: { n: number; eid: number; airDate?: string; length?: number }[];
+		/** Undated first and last main episodes are dated by the entry's start and end dates. */
+		main: AnidbEpisode[];
+		/** Specials (S1 as n 1). */
+		specials: AnidbEpisode[];
+		/** The MyAnimeList entries AniDB links (several for an entry MAL splits into parts). */
+		malIds: number[];
 	}
 
 	/** The AniDB ID used for an anime Seanime has no metadata for. */
@@ -341,16 +357,21 @@ declare namespace CEM {
 		eids?: Record<string, number>;
 		/** This anime's episode number -> AniDB air date, to add episodes Seanime's metadata is missing once aired. */
 		airDates?: Record<string, string>;
+		/** This anime's episode number -> AniDB's title, air date, length and summary (see the fill-in priorities). */
+		episodes?: Record<string, { title?: string; airDate?: string; length?: number; summary?: string }>;
+		/** The episodes are the AniDB entry's specials (a related anime has its main episodes), S1 onwards plus the offset. */
+		specials?: boolean;
 		from?: string;
 		reason?: string;
-		/** "none" without checking related anime (background): looked up again on its page. */
-		needsVisit?: boolean;
+		/** "none": how many of TMDB's air dates it had; looked up again once TMDB has more (they're tried on their own too). */
+		tmdbPoints?: number;
 		checkedAt: number;
 	}
 
 	/** One step up an anime's parent/prequel chain, from AniList, cached for 30 days. */
 	interface RelationStep {
-		next: { id: number; title: string; relation: string } | null;
+		/** episodes: AniList's episode count for it (0 when unknown; missing in steps cached before it was kept). */
+		next: { id: number; title: string; relation: string; episodes?: number } | null;
 		at: number;
 	}
 }
