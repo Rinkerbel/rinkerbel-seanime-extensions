@@ -1510,6 +1510,11 @@ function init(): void {
 			const m = (date ?? "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
 			return m ? Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / DAY) : NaN;
 		};
+		/**
+		 * AniDB often dates episode 1 by an early screening (a premiere event weeks before the broadcast): a date for it up
+		 * to 90 days before the broadcast's says nothing against a match
+		 */
+		const earlyScreening = (n: number, day: number, broadcast: number) => n === 1 && day < broadcast - 1 && broadcast - day <= 90;
 		/** An episode title reduced for comparing ("" for a placeholder like "Episode 4"), so punctuation and case don't matter. */
 		const plainTitle = (title?: string) => {
 			const plain = (title ?? "").toLowerCase().replace(/[^a-z0-9\u00c0-\u024f\u3040-\u30ff\u4e00-\u9fff]+/g, "");
@@ -1873,7 +1878,9 @@ function init(): void {
 				let against = 0;
 				for (const d of set) {
 					const day = tmdbDays[at(d.n)];
-					if (day !== undefined && Math.abs(day - shift - d.day) > 1) against++;
+					// The list the plugin supplies is dated from AniDB: an early-screened episode 1 would push the match a
+					// week's shift and an episode off
+					if (day !== undefined && Math.abs(day - shift - d.day) > 1 && !earlyScreening(d.n, d.day, day - shift)) against++;
 				}
 				for (const key of mainKeys) {
 					const here = at(Number(key));
@@ -2939,11 +2946,8 @@ function init(): void {
 			const offset = ranked[0];
 			const agree = votes[offset];
 			if (offset < 0) return fail(`AniDB ${anime.aid}'s episodes start after this anime's (offset ${offset})`);
-			// AniDB often dates episode 1 by an early screening (a premiere event weeks before the broadcast): that date
-			// doesn't count against it
 			const first = anime.main.find((e) => e.n === 1);
-			const premiere =
-				offset === 0 && !!first && points.some((p) => p.n === 1 && toDay(first.airDate) < p.day - 1 && p.day - toDay(first.airDate) <= 90);
+			const premiere = offset === 0 && !!first && points.some((p) => earlyScreening(1, toDay(first.airDate), p.day));
 			const counted = points.length - (premiere ? 1 : 0);
 			if (agree < Math.max(1, Math.ceil(counted * 0.8))) return fail(`only ${agree} of ${points.length} air dates line up with AniDB ${anime.aid}`);
 			const total = Math.max(anime.episodeCount, anime.main[anime.main.length - 1].n);
