@@ -48,8 +48,16 @@ function init(): void {
 		const overrides = ($storage.get("TMDB_OVERRIDES") ?? {}) as Record<number, CEM.TMDBOverrides>;
 		const anidb = $shared.use<CEM.AnidbStore>("anidb").get(mediaId);
 		// An automatic match only while its lookup is on (it stays stored for when it's back on)
+		if (overrides[mediaId]?.anidbNone) return { anidb };
 		const aid = overrides[mediaId]?.anidbId ?? ($getUserPreference("anidb-lookup") !== "false" && anidb?.status === "verified" ? anidb.aid : undefined);
-		return { aid, anidb, own: aid && anidb?.aid === aid ? anidb : undefined };
+		let own = aid && anidb?.aid === aid ? anidb : undefined;
+		// Episodes whose override says "none" get none of it
+		const none = (overrides[mediaId]?.episodeOverrides ?? []).filter((o) => o.anidbNone).map((o) => o.aniDBEpisode);
+		if (own && none.length) {
+			const omit = <T>(r?: Record<string, T>) => r && Object.fromEntries(Object.entries(r).filter(([k]) => none.indexOf(k) === -1));
+			own = { ...own, eids: omit(own.eids), airDates: omit(own.airDates), episodes: omit(own.episodes) };
+		}
+		return { aid, anidb, own };
 	});
 	type AnidbInUse = (mediaId: number) => { aid?: number; anidb?: CEM.AnidbMatch; own?: CEM.AnidbMatch };
 
@@ -121,7 +129,8 @@ function init(): void {
 		if (!status?.fallback) return null;
 		const custom = $shared.use<CEM.SharedDatabase>("database").get(mediaId).data;
 		const thumbs = $shared.use<CEM.ThumbnailStore>("thumbnails").get(mediaId);
-		const matched = thumbs?.status === "matched" && $shared.use<() => boolean>("tmdbUsable")();
+		// A failed match only holds the episodes their overrides point at
+		const matched = !!thumbs && $shared.use<() => boolean>("tmdbUsable")();
 		const stills = matched && $getUserPreference("tmdb-thumbnails") === "true" ? Object.keys(thumbs.images) : [];
 		const filled = matched && $getUserPreference("tmdb-fill-missing") === "true" ? Object.keys(thumbs.episodes ?? {}) : [];
 
@@ -147,8 +156,8 @@ function init(): void {
 	// When Animap has no entry (e.g. AniDB entries that are 18+), Seanime errors out before onAnimeMetadata fires and
 	// custom metadata is never applied. For those anime, supply the episode list here instead so Animap is never called;
 	// onAnimeMetadata still runs afterwards and merges the custom metadata and TMDB stills. Only anime with custom
-	// metadata or matched TMDB stills are taken over, so everything else keeps going to Animap and picks up its entry
-	// as soon as it exists.
+	// metadata or TMDB stills (a match's, or episode overrides') are taken over, so everything else keeps going to Animap
+	// and picks up its entry as soon as it exists.
 	$app.onAnimeMetadataRequested((e) => {
 		const hookDebug = $shared.use<(line: string) => void>("hookDebug");
 		const newEpisode = $shared.use<(key: string, airDate?: string, eid?: number, title?: string) => $app.Metadata_EpisodeMetadata>("newEpisode");
@@ -378,6 +387,16 @@ function init(): void {
 			return { id: Number(m[2]), ...(m[1] ? { type: m[1].toLowerCase() as "tv" | "movie" } : {}) };
 		}
 		const formatTmdbId = (id: number | undefined, type?: "tv" | "movie") => (id ? `${type === "movie" ? "m" : type === "tv" ? "s" : ""}${id}` : "");
+		/**
+		 * Each tab's override fields by source: "none" in any of them leaves that source out for the anime (or episode),
+		 * saved as the ID field's "none", the others empty and off
+		 */
+		const NONE_FIELDS = {
+			media: { tmdb: ["tmdbId", "tmdbSeason", "tmdbOffset"], anidb: ["anidbId", "anidbOffset"] },
+			episode: { tmdb: ["tmdbId", "tmdbSeason", "tmdbEpisode"], anidb: ["anidbId", "anidbEpisode"] },
+		};
+		const isNone = (value: string) => value.trim().toLowerCase() === "none";
+		const noneIn = (refs: Record<string, $ui.FieldRef<string>>, keys: string[]) => keys.some((k) => isNone(refs[k].current));
 		/** The TMDB ID field of an override into the override; throws on one that isn't an ID */
 		function readTmdbIdField(value: string, update: { tmdbId?: number; tmdbType?: "tv" | "movie" }) {
 			if (!value.trim().length) return;
@@ -579,10 +598,10 @@ function init(): void {
 					},
 					/** The fields' text for a saved episode override */
 					values: (data: CEM.TMDBOverrides["episodeOverrides"][number]): Record<string, string> => ({
-						tmdbId: formatTmdbId(data.tmdbId, data.tmdbType),
+						tmdbId: data.tmdbNone ? "none" : formatTmdbId(data.tmdbId, data.tmdbType),
 						tmdbSeason: data.tmdbSeason?.toString() ?? "",
 						tmdbEpisode: data.tmdbEpisode?.toString() ?? "",
-						anidbId: data.anidbId?.toString() ?? "",
+						anidbId: data.anidbNone ? "none" : data.anidbId?.toString() ?? "",
 						anidbEpisode: data.anidbEpisode ?? "",
 					}),
 					fill: (data: CEM.TMDBOverrides["episodeOverrides"][number]) => {
@@ -597,16 +616,20 @@ function init(): void {
 						const tmdbSeason = refs.tmdbSeason.current;
 						const tmdbEpisode = refs.tmdbEpisode.current;
 
-						readTmdbIdField(refs.tmdbId.current, update);
-						if (update.tmdbType === "movie" && (tmdbSeason.trim() || tmdbEpisode.trim()))
-							throw new Error("A TMDB movie is one episode: clear the TMDB Season and Episode, or enter a show's ID (s<id>).");
-						if (tmdbSeason.length && !isNaN(Number(tmdbSeason))) update.tmdbSeason = Number(tmdbSeason);
-						if (tmdbEpisode.length && !isNaN(Number(tmdbEpisode))) update.tmdbEpisode = Number(tmdbEpisode);
+						if (noneIn(refs, NONE_FIELDS.episode.tmdb)) update.tmdbNone = true;
+						else {
+							readTmdbIdField(refs.tmdbId.current, update);
+							if (update.tmdbType === "movie" && (tmdbSeason.trim() || tmdbEpisode.trim()))
+								throw new Error("A TMDB movie is one episode: clear the TMDB Season and Episode, or enter a show's ID (s<id>).");
+							if (tmdbSeason.length && !isNaN(Number(tmdbSeason))) update.tmdbSeason = Number(tmdbSeason);
+							if (tmdbEpisode.length && !isNaN(Number(tmdbEpisode))) update.tmdbEpisode = Number(tmdbEpisode);
+						}
 
 						// AniDB: both fields or neither (the ID defaults to the anime's), checked against AniDB's episode list
 						const aidText = refs.anidbId.current.trim();
 						const epText = refs.anidbEpisode.current.trim().toUpperCase();
-						if (aidText || epText) {
+						if (noneIn(refs, NONE_FIELDS.episode.anidb)) update.anidbNone = true;
+						else if (aidText || epText) {
 							const aid = Number(aidText || placeholderAid);
 							if (!Number.isInteger(aid) || aid < 1) throw new Error(aidText ? `AniDB ID "${aidText}" isn't a number.` : "Enter the AniDB ID too: this anime has none yet.");
 							if (!/^S?\d+$/.test(epText)) throw new Error(`AniDB Episode "${epText}" isn't an episode number like "12" or a special like "S3".`);
@@ -634,10 +657,10 @@ function init(): void {
 					ignoreWarnings: ctx.fieldRef<boolean>(false),
 					/** The fields' text for a saved media override */
 					values: (data: Omit<CEM.TMDBOverrides, "mediaId" | "episodeOverrides">): Record<string, string> => ({
-						tmdbId: formatTmdbId(data.tmdbId, data.tmdbType),
+						tmdbId: data.tmdbNone ? "none" : formatTmdbId(data.tmdbId, data.tmdbType),
 						tmdbSeason: data.tmdbRanges?.length ? formatRanges(data.tmdbRanges) : data.tmdbSeasons?.length ? formatSeasons(data.tmdbSeasons) : data.tmdbSeason?.toString() ?? "",
 						tmdbOffset: data.tmdbOffset?.toString() ?? "",
-						anidbId: data.anidbId?.toString() ?? "",
+						anidbId: data.anidbNone ? "none" : data.anidbId?.toString() ?? "",
 						anidbOffset: data.anidbOffset?.toString() ?? "",
 					}),
 					fill: (data: Omit<CEM.TMDBOverrides, "mediaId" | "episodeOverrides">) => {
@@ -647,30 +670,36 @@ function init(): void {
 					resetFieldRefs: () => Object.values(tmdb.overrides.media.fieldRefs).forEach((fr) => fr.setValue("")),
 					save: (mediaId: number) => {
 						const update: Omit<CEM.TMDBOverrides, "mediaId" | "episodeOverrides"> = {};
-						const tmdbId = tmdb.overrides.media.fieldRefs.tmdbId.current;
-						const tmdbSeason = tmdb.overrides.media.fieldRefs.tmdbSeason.current;
+						const refs = tmdb.overrides.media.fieldRefs;
+						const tmdbSeason = refs.tmdbSeason.current;
 
-						readTmdbIdField(tmdbId, update);
-						if (tmdbSeason.trim().length) {
-							if (update.tmdbType === "movie") throw new Error("A TMDB movie has no seasons: clear the TMDB Season, or enter a show's ID (s<id>).");
-							if (/^\s*S/i.test(tmdbSeason)) {
-								const ranges = parseRanges(tmdbSeason);
-								if (typeof ranges === "string") throw new Error(`TMDB Season: ${ranges}`);
-								update.tmdbSeason = ranges[0].season;
-								update.tmdbRanges = ranges;
-							} else {
-								const seasons = parseSeasons(tmdbSeason);
-								if (!seasons) throw new Error(`TMDB Season "${tmdbSeason}" isn't a season, a list like "1-4, 6" or ranges like "S1E2-S1E4, S1E7".`);
-								update.tmdbSeason = seasons[0];
-								if (seasons.length > 1) update.tmdbSeasons = seasons;
+						if (noneIn(refs, NONE_FIELDS.media.tmdb)) update.tmdbNone = true;
+						else {
+							readTmdbIdField(refs.tmdbId.current, update);
+							if (tmdbSeason.trim().length) {
+								if (update.tmdbType === "movie") throw new Error("A TMDB movie has no seasons: clear the TMDB Season, or enter a show's ID (s<id>).");
+								if (/^\s*S/i.test(tmdbSeason)) {
+									const ranges = parseRanges(tmdbSeason);
+									if (typeof ranges === "string") throw new Error(`TMDB Season: ${ranges}`);
+									update.tmdbSeason = ranges[0].season;
+									update.tmdbRanges = ranges;
+								} else {
+									const seasons = parseSeasons(tmdbSeason);
+									if (!seasons) throw new Error(`TMDB Season "${tmdbSeason}" isn't a season, a list like "1-4, 6" or ranges like "S1E2-S1E4, S1E7".`);
+									update.tmdbSeason = seasons[0];
+									if (seasons.length > 1) update.tmdbSeasons = seasons;
+								}
 							}
+							const tmdbOffset = nonZeroInt(refs.tmdbOffset.current);
+							if (tmdbOffset !== undefined) update.tmdbOffset = tmdbOffset;
 						}
-						const tmdbOffset = nonZeroInt(tmdb.overrides.media.fieldRefs.tmdbOffset.current);
-						if (tmdbOffset !== undefined) update.tmdbOffset = tmdbOffset;
-						const anidbId = Number(tmdb.overrides.media.fieldRefs.anidbId.current.trim());
-						if (Number.isInteger(anidbId) && anidbId > 0) update.anidbId = anidbId;
-						const anidbOffset = nonZeroInt(tmdb.overrides.media.fieldRefs.anidbOffset.current);
-						if (anidbOffset !== undefined) update.anidbOffset = anidbOffset;
+						if (noneIn(refs, NONE_FIELDS.media.anidb)) update.anidbNone = true;
+						else {
+							const anidbId = Number(refs.anidbId.current.trim());
+							if (Number.isInteger(anidbId) && anidbId > 0) update.anidbId = anidbId;
+							const anidbOffset = nonZeroInt(refs.anidbOffset.current);
+							if (anidbOffset !== undefined) update.anidbOffset = anidbOffset;
+						}
 
 						// Overwrite so a cleared field actually removes the old value
 						const { episodeOverrides, ignoreWarnings } = tmdb.overrides.get(mediaId);
@@ -726,22 +755,32 @@ function init(): void {
 
 		/**
 		 * The episode editor's Auto-fill: this episode's data from the anime's TMDB match and AniDB match, found the same
-		 * way as everywhere else (a refresh when they're out of date). TMDB first, AniDB's English title, air date and
+		 * way as everywhere else (a refresh when they're out of date), or its own override's show or movie. TMDB first, AniDB's English title, air date and
 		 * length where TMDB has none. Throws when neither has anything.
 		 */
 		async function episodeAutoFill(mediaId: number, key: string) {
 			const data: { title?: string; length?: string; airDate?: string; overview?: string; image?: string } = {};
 			const from: string[] = [];
 			let why = "";
-			if (tmdbOn()) {
-				try {
-					await refreshAnime(mediaId, false);
-				} catch (e) {
-					why = (e as Error).message;
+			// An episode pointing at its own show or movie needs no match for the anime, nor the switches (by hand)
+			const override = tmdb.overrides.get(mediaId);
+			const own = tmdb.API_KEY
+				? overrideEpisodes({ ...override, episodeOverrides: override.episodeOverrides.filter((o) => o.aniDBEpisode === key && o.tmdbId) }, {}, undefined)[key]
+				: undefined;
+			if (override.episodeOverrides.some((o) => o.aniDBEpisode === key && o.tmdbNone) || (override.tmdbNone && !own)) why = "TMDB is set to none in your overrides";
+			else if (own || tmdbOn()) {
+				let record: CEM.ThumbnailRecord | undefined;
+				if (!own) {
+					try {
+						await refreshAnime(mediaId, false);
+					} catch (e) {
+						why = (e as Error).message;
+					}
+					record = thumbnails.get(mediaId);
 				}
-				const record = thumbnails.get(mediaId);
-				if (record?.status === "failed") why = record.reason ?? "no TMDB match";
-				const target = record?.status === "matched" ? record.map[key] : undefined;
+				// A failed match still has the episodes their overrides point at
+				const target = own ?? record?.map[key];
+				if (record?.status === "failed" && !target) why = record.reason ?? "no TMDB match";
 				const ep = target ? await tmdbSession().episode(target) : undefined;
 				if (ep) {
 					if (plainTitle(ep.name)) data.title = ep.name;
@@ -750,7 +789,8 @@ function init(): void {
 					if (ep.overview) data.overview = ep.overview;
 					if (ep.still_path) data.image = tmdbImage(ep.still_path);
 					from.push(target?.movie ? `TMDB movie ${target.tmdbId}` : `TMDB S${target?.season}E${target?.episode}`);
-				} else if (record?.status === "matched") why = `TMDB's match has no episode ${key}`;
+				} else if (target) why = `TMDB has no ${target.movie ? `movie ${target.tmdbId}` : `S${target.season}E${target.episode} on ${target.tmdbId}`}`;
+				else if (record?.status === "matched") why = `TMDB's match has no episode ${key}`;
 			} else why = tmdbMissing || "TMDB stills and fill-in are off";
 			if (await needsAnidb(mediaId)) await refreshAnidb(mediaId).catch((e) => log.debug(`${mediaId}: AniDB lookup for Auto-fill failed:`, e));
 			const ep = anidbEpisodes(mediaId)[key];
@@ -761,7 +801,7 @@ function init(): void {
 			// AniDB's air dates come first, as everywhere else
 			if (ep?.airDate && ep.airDate !== data.airDate) data.airDate = ep.airDate;
 			if (Object.keys(data).length > before)
-				from.push(`AniDB ${tmdb.overrides.get(mediaId).episodeOverrides.find((o) => o.aniDBEpisode === key)?.anidbId ?? anidbStore.get(mediaId)?.aid}`);
+				from.push(`AniDB ${override.episodeOverrides.find((o) => o.aniDBEpisode === key)?.anidbId ?? anidbStore.get(mediaId)?.aid}`);
 			if (!from.length) throw new Error(`Nothing to fill for episode ${key}${why ? `: ${why}` : ""}.`);
 			return { data, from };
 		}
@@ -770,9 +810,12 @@ function init(): void {
 		function anidbEpisodes(mediaId: number) {
 			const match = anidbStore.get(mediaId);
 			const override = tmdb.overrides.get(mediaId);
-			const inUse = match && match.status !== "none" && (override.anidbId ? match.aid === override.anidbId : anidbLookup());
+			const inUse = match && match.status !== "none" && !override.anidbNone && (override.anidbId ? match.aid === override.anidbId : anidbLookup());
 			const out: Record<string, { title?: string; airDate?: string; length?: number; summary?: string }> = { ...(inUse ? match.episodes : {}) };
-			for (const o of override.episodeOverrides) if (o.aniDBEpisode && o.anidb) out[o.aniDBEpisode] = o.anidb;
+			for (const o of override.episodeOverrides) {
+				if (o.aniDBEpisode && o.anidb) out[o.aniDBEpisode] = o.anidb;
+				if (o.aniDBEpisode && o.anidbNone) delete out[o.aniDBEpisode];
+			}
 			return out;
 		}
 
@@ -805,7 +848,7 @@ function init(): void {
 		const MODAL_LABEL_WIDTH = "8rem";
 		const EDITOR_LABEL_WIDTH = "11.5rem";
 		/** Text of the Media tab's description and status lines: how many lines it wraps to, roughly, at the modal's width */
-		const MEDIA_TAB_TEXT = "Applies to every episode of this anime, except episodes with their own override. Empty fields keep what the plugin found (shown greyed out).";
+		const MEDIA_TAB_TEXT = "Applies to every episode of this anime, except episodes with their own override. Empty fields keep what the plugin found (shown greyed out). Enter none to leave TMDB or AniDB out.";
 		const textLines = (text: string) => Math.max(1, Math.ceil(text.length / 95));
 
 		/**
@@ -840,7 +883,7 @@ function init(): void {
 				// The episode's own on AniDB: its number plus the offset, among the specials when the match is to them
 				if (episode !== null && /^\d+$/.test(episode)) out.epAnidbEpisode = `${match.specials ? "S" : ""}${Number(episode) + (match.offset ?? 0)}`;
 			} else if (seanime) out.anidbId = `${seanime}`;
-			const target = episode !== null && tmdbOn() && record?.status === "matched" ? record.map[episode] : undefined;
+			const target = episode !== null && tmdbOn() ? record?.map[episode] : undefined;
 			if (target) {
 				out.epTmdbId = formatTmdbId(target.tmdbId, target.movie ? "movie" : "tv");
 				if (target.season !== undefined) out.epSeason = `${target.season}`;
@@ -1001,9 +1044,11 @@ function init(): void {
 
 		/**
 		 * A notification dot on a button's corner, its halo pinging (still under reduced motion). The same components either
-		 * way, the dot only hidden: a changed trigger would remount a modal, closing it (after a refresh, say).
+		 * way, the dot only hidden: a changed trigger would remount a modal, closing it (after a refresh, say). With room,
+		 * the button moves left while the dot shows, by as far as the halo reaches past it: by the tray's edge each ping
+		 * widened the tray, flashing a scrollbar.
 		 */
-		function withDot(button: any, show: boolean, color: string) {
+		function withDot(button: any, show: boolean, color: string, room = false) {
 			const dot = { position: "absolute", top: "-0.25rem", right: "-0.25rem", width: "0.625rem", height: "0.625rem", display: show ? "block" : "none" };
 			return tray.div(
 				[
@@ -1012,13 +1057,13 @@ function init(): void {
 					tray.div([], { className: `rounded-full ${color} animate-ping pointer-events-none`, style: { ...dot, opacity: "0.75" } }),
 					tray.div([], { className: `rounded-full ${color} pointer-events-none`, style: dot }),
 				],
-				{ className: "relative w-fit" },
+				{ className: "relative w-fit", style: show && room ? { marginRight: "0.5625rem" } : {} },
 			);
 		}
 
 		/**
 		 * Override fields changed since they were saved (Auto-fill fills them without saving): a blue dot on that tab's Save.
-		 * Checked when a field changes, and after anything that fills or saves them.
+		 * Checked when a field changes, and after anything that fills or saves them; so are the fields that are off.
 		 */
 		const unsaved = ctx.state<{ media: boolean; episode: boolean; editor: boolean }>({ media: false, episode: false, editor: false });
 		function checkUnsaved() {
@@ -1036,7 +1081,32 @@ function init(): void {
 			};
 			const now = unsaved.get();
 			if (next.media !== now.media || next.episode !== now.episode || next.editor !== now.editor) unsaved.set(next);
+
+			// Fields that are off ("media.tmdbSeason"), and cleared as they turn off: a source's other fields once one of them
+			// says "none"; a movie's Season and Offset (an episode's Season and Episode), as it has no seasons, while the TMDB
+			// ID field, or the match shown in it when it's empty, is a movie
+			const auto = autoPlaceholders(media.id, episode ?? null);
+			const off: Record<string, boolean> = {};
+			for (const tab of ["media", "episode"] as const) {
+				const refs: Record<string, $ui.FieldRef<string>> = tmdb.overrides[tab].fieldRefs;
+				for (const [source, keys] of Object.entries(NONE_FIELDS[tab])) {
+					const none = keys.find((k) => isNone(refs[k].current));
+					if (none) keys.forEach((k) => k !== none && (off[`${tab}.${k}`] = true));
+					else if (source === "tmdb" && parseTmdbId(refs.tmdbId.current.trim() || (tab === "media" ? auto.tmdbId : auto.epTmdbId))?.type === "movie")
+						keys.slice(1).forEach((k) => (off[`${tab}.${k}`] = true));
+				}
+			}
+			const was = offFields.get();
+			if (stableJson(off) === stableJson(was)) return;
+			offFields.set(off);
+			for (const key of Object.keys(off)) {
+				if (was[key]) continue;
+				const [tab, field] = key.split(".") as ["media" | "episode", string];
+				(tmdb.overrides[tab].fieldRefs as Record<string, $ui.FieldRef<string>>)[field].setValue("");
+			}
 		}
+		const offFields = ctx.state<Record<string, boolean>>({});
+		const isOff = (field: string) => !!offFields.get()[field];
 		for (const refs of [tmdb.overrides.media.fieldRefs, tmdb.overrides.episode.fieldRefs, fieldRefs.data]) for (const ref of Object.values(refs)) ref.onValueChange(() => checkUnsaved());
 
 		/** Whether the overrides modal is open */
@@ -1071,7 +1141,7 @@ function init(): void {
 				...(episode !== null ? { size: "md" as const } : {}),
 			});
 			// Something to fix (no TMDB match, no AniDB ID): the orange dot, the reason as the tooltip
-			const trigger = tray.tooltip(withDot(button, !!attention, "bg-orange-500"), {
+			const trigger = tray.tooltip(withDot(button, !!attention, "bg-orange-500", true), {
 				text: attention || (tmdb.API_KEY ? "Override AniDB and TMDB matches" : "Override AniDB matches"),
 			});
 			return tray.modal({
@@ -1098,26 +1168,26 @@ function init(): void {
 							...(episode !== null
 								? [
 									pane("episode", [
-											tray.text("Applies to this episode only, over the media override and any range. Enter m<id> to make it a TMDB movie. AniDB Episode takes a number or a special like S3.", {
+											tray.text("Applies to this episode only, over the media override and any range. Enter m<id> to make it a TMDB movie. AniDB Episode takes a number or a special like S3. Enter none to leave TMDB or AniDB out.", {
 												className: "text-sm text-[--muted] break-normal text-pretty",
 											}),
 											styledInput("TMDB ID", {
 												fieldRef: tmdb.overrides.episode.fieldRefs.tmdbId,
-												disabled: !tmdb.API_KEY,
+												disabled: !tmdb.API_KEY || isOff("episode.tmdbId"),
 												placeholder: auto.epTmdbId,
 											}),
 											styledInput("TMDB Season", {
 												fieldRef: tmdb.overrides.episode.fieldRefs.tmdbSeason,
-												disabled: !tmdb.API_KEY,
+												disabled: !tmdb.API_KEY || isOff("episode.tmdbSeason"),
 												placeholder: auto.epSeason,
 											}),
 											styledInput("TMDB Episode", {
 												fieldRef: tmdb.overrides.episode.fieldRefs.tmdbEpisode,
-												disabled: !tmdb.API_KEY,
+												disabled: !tmdb.API_KEY || isOff("episode.tmdbEpisode"),
 												placeholder: auto.epEpisode,
 											}),
-											styledInput("AniDB ID", { fieldRef: tmdb.overrides.episode.fieldRefs.anidbId, placeholder: auto.anidbId }),
-											styledInput("AniDB Episode", { fieldRef: tmdb.overrides.episode.fieldRefs.anidbEpisode, placeholder: auto.epAnidbEpisode }),
+											styledInput("AniDB ID", { fieldRef: tmdb.overrides.episode.fieldRefs.anidbId, disabled: isOff("episode.anidbId"), placeholder: auto.anidbId }),
+											styledInput("AniDB Episode", { fieldRef: tmdb.overrides.episode.fieldRefs.anidbEpisode, disabled: isOff("episode.anidbEpisode"), placeholder: auto.epAnidbEpisode }),
 											tray.div([], { className: "flex-1" }),
 											tray.flex(
 												[
@@ -1150,6 +1220,8 @@ function init(): void {
 															} catch (e) {
 																return ctx.toast.error((e as Error).message);
 															}
+															// As saved: a "none" typed in any of a source's fields shows in its ID field
+															tmdb.overrides.episode.fill(tmdb.overrides.get(currentMediaData.id).episodeOverrides.find((o) => o.aniDBEpisode === episode) ?? {});
 															rematch(currentMediaData.id);
 															// Its AniDB episode shows once the modal closes (see rebuild)
 															scheduleRebuild(false);
@@ -1171,23 +1243,23 @@ function init(): void {
 									statusLine("tmdb", tmdbLine),
 									styledInput("TMDB ID", {
 										fieldRef: tmdb.overrides.media.fieldRefs.tmdbId,
-										disabled: !tmdb.API_KEY,
+										disabled: !tmdb.API_KEY || isOff("media.tmdbId"),
 										placeholder: auto.tmdbId,
 									}),
 									styledInput("TMDB Season", {
 										fieldRef: tmdb.overrides.media.fieldRefs.tmdbSeason,
-										disabled: !tmdb.API_KEY,
+										disabled: !tmdb.API_KEY || isOff("media.tmdbSeason"),
 										placeholder: auto.tmdbSeason,
 									}),
 									styledInput("TMDB Offset", {
 										fieldRef: tmdb.overrides.media.fieldRefs.tmdbOffset,
-										disabled: !tmdb.API_KEY,
+										disabled: !tmdb.API_KEY || isOff("media.tmdbOffset"),
 										placeholder: auto.tmdbOffset,
 									}),
 									statusLine("anidb", anidbLine),
 									// Real AniDB ID for anime Seanime has no metadata for: clears its "metadata retrieval not available" notice
-									styledInput("AniDB ID", { fieldRef: tmdb.overrides.media.fieldRefs.anidbId, placeholder: auto.anidbId }),
-									styledInput("AniDB Offset", { fieldRef: tmdb.overrides.media.fieldRefs.anidbOffset, placeholder: auto.anidbOffset }),
+									styledInput("AniDB ID", { fieldRef: tmdb.overrides.media.fieldRefs.anidbId, disabled: isOff("media.anidbId"), placeholder: auto.anidbId }),
+									styledInput("AniDB Offset", { fieldRef: tmdb.overrides.media.fieldRefs.anidbOffset, disabled: isOff("media.anidbOffset"), placeholder: auto.anidbOffset }),
 									tray.switch("Ignore warnings for this anime", {
 										fieldRef: tmdb.overrides.media.ignoreWarnings,
 										onChange: ctx.eventHandler(`ignore-warnings-${currentMediaData.id}`, ({ value }: { value: boolean }) => {
@@ -1260,7 +1332,7 @@ function init(): void {
 													// The media fields as stored, to tell whether saving changed anything
 													const mediaFields = () => {
 														const o = tmdb.overrides.get(currentMediaData.id);
-														return stableJson([o.tmdbId, o.tmdbType, o.tmdbSeason, o.tmdbSeasons, o.tmdbRanges, o.tmdbOffset, o.anidbId, o.anidbOffset]);
+														return stableJson([o.tmdbId, o.tmdbType, o.tmdbSeason, o.tmdbSeasons, o.tmdbRanges, o.tmdbOffset, o.anidbId, o.anidbOffset, o.tmdbNone, o.anidbNone]);
 													};
 													const before = mediaFields();
 													try {
@@ -1268,6 +1340,8 @@ function init(): void {
 													} catch (e) {
 														return ctx.toast.error((e as Error).message);
 													}
+													// As saved: a "none" typed in any of a source's fields shows in its ID field
+													tmdb.overrides.media.fill(tmdb.overrides.get(currentMediaData.id));
 													// Saved as it was: no new match, lookup or rebuild (a long show takes a while to match)
 													const record = thumbnails.get(currentMediaData.id);
 													const saved = tmdb.overrides.get(currentMediaData.id);
@@ -1984,6 +2058,24 @@ function init(): void {
 			return picked.concat(run.slice(end + 1));
 		}
 
+		/** Episode overrides always win, over any match: their own show or movie, else the anime's (id) */
+		function overrideEpisodes(override: CEM.TMDBOverrides, into: Record<string, CEM.TMDBTarget>, id: number | undefined) {
+			for (const o of override.episodeOverrides) {
+				if (!o.aniDBEpisode || !tmdbFields(o)) continue;
+				if (o.tmdbType === "movie" && o.tmdbId) {
+					into[o.aniDBEpisode] = { tmdbId: o.tmdbId, movie: true };
+					continue;
+				}
+				const base = into[o.aniDBEpisode];
+				const number = o.aniDBEpisode.match(/\d+/);
+				const season = o.tmdbSeason ?? base?.season;
+				const episode = o.tmdbEpisode ?? base?.episode ?? (number ? parseInt(number[0], 10) : undefined);
+				const target = o.tmdbId ?? id;
+				if (target && season !== undefined && episode !== undefined) into[o.aniDBEpisode] = { tmdbId: target, season, episode };
+			}
+			return into;
+		}
+
 		/** Work out where every episode of an anime lives on TMDB. Throws on request errors. */
 		async function buildMapping(
 			mediaId: number,
@@ -1996,12 +2088,15 @@ function init(): void {
 			/** A title search hit whose name is exactly one of this anime's titles: its dates may be a few days off */
 			nameMatch = false,
 		): Promise<Mapping> {
-			const fail = (reason: string): Mapping => ({ status: "failed", reason, map: {} });
+			// "none": no match for the anime, only the episodes pointed at their own show or movie
+			if (override.tmdbNone) return { status: "failed", reason: "your override sets none", map: overrideEpisodes(override, {}, undefined) };
+			// A failed match still takes the episodes their overrides point at (their own show or movie, else this one's ID)
+			const fail = (reason: string): Mapping => ({ status: "failed", reason, map: overrideEpisodes(override, {}, tmdbId) });
 			// The AniDB match only while in use (its dates and episodes help the match); the stored one tells whether the list
 			// the plugin supplies was dated by AniDB. Its AniDB episodes are a related anime's specials: on a tie, TMDB's
 			// specials season is it too.
 			const storedAnidb = anidbStore.get(mediaId);
-			const anidbMatch = storedAnidb?.status === "override" || (storedAnidb?.status === "verified" && anidbLookup()) ? storedAnidb : undefined;
+			const anidbMatch = !override.anidbNone && (storedAnidb?.status === "override" || (storedAnidb?.status === "verified" && anidbLookup())) ? storedAnidb : undefined;
 			const preferSpecials = anidbMatch?.status === "verified" && !!anidbMatch.specials;
 			const episodes = metadata?.episodes ?? {};
 			// AniList's total. Seanime hands optional numbers over as wrapped Go pointers, which === never equals.
@@ -2056,12 +2151,14 @@ function init(): void {
 				}
 			}
 
+			const map: Record<string, CEM.TMDBTarget> = {};
+
 			if (tmdbType === "movie") {
 				// One episode, the movie: read like any other episode (see tmdbSession's episode)
-				return { status: "matched", source: override.tmdbId ? "override" : "auto", tmdbType, tmdbId, map: { "1": { tmdbId, movie: true } }, movie: details as CEM.TMDBMovieDetails };
+				map["1"] = { tmdbId, movie: true };
+				overrideEpisodes(override, map, tmdbId);
+				return { status: "matched", source: override.tmdbId ? "override" : "auto", tmdbType, tmdbId, map, movie: details as CEM.TMDBMovieDetails };
 			}
-
-			const map: Record<string, CEM.TMDBTarget> = {};
 
 			// The media override decides everything, with the episode overrides on top. Several seasons are read as one run
 			// of episodes: the offset counts across all of them and season 2 picks up where season 1 ends.
@@ -2457,20 +2554,7 @@ function init(): void {
 				}
 			}
 
-			// Episode overrides always win
-			for (const o of override.episodeOverrides) {
-				if (!o.aniDBEpisode || !tmdbFields(o)) continue;
-				if (o.tmdbType === "movie" && o.tmdbId) {
-					map[o.aniDBEpisode] = { tmdbId: o.tmdbId, movie: true };
-					continue;
-				}
-				const base = map[o.aniDBEpisode];
-				const number = o.aniDBEpisode.match(/\d+/);
-				const season = o.tmdbSeason ?? base?.season;
-				const episode = o.tmdbEpisode ?? base?.episode ?? (number ? parseInt(number[0], 10) : undefined);
-				if (season !== undefined && episode !== undefined) map[o.aniDBEpisode] = { tmdbId: o.tmdbId ?? tmdbId, season, episode };
-			}
-
+			overrideEpisodes(override, map, tmdbId);
 			return { status: "matched", source: "auto", tmdbType, tmdbId, map, fallback: { season: fallback.season, offset: fallback.offset }, segments, ...(singles.length ? { singles } : {}), ...(byCount ? { byCount } : {}), ...(byTitle ? { byTitle } : {}), ...(byName ? { byName } : {}), ...(byAnidb ? { byAnidb } : {}) };
 		}
 
@@ -2577,7 +2661,15 @@ function init(): void {
 			try {
 				mapping = await buildMapping(mediaId, media, metadata, session, override);
 				mapping.idFrom = override.tmdbId ? "your override" : "Animap";
-				trace.add("tmdb", mediaId, mapping.noId ? "No TMDB ID in your overrides or Seanime's metadata" : `TMDB ${mapping.tmdbId ?? override.tmdbId} from ${mapping.idFrom}: ${outcome(mapping)}`);
+				trace.add(
+					"tmdb",
+					mediaId,
+					override.tmdbNone
+						? "Your override sets none: nothing is looked up on TMDB"
+						: mapping.noId
+							? "No TMDB ID in your overrides or Seanime's metadata"
+							: `TMDB ${mapping.tmdbId ?? override.tmdbId} from ${mapping.idFrom}: ${outcome(mapping)}`,
+				);
 				// No ID from the override or Animap: search TMDB by title, each hit checked against the air dates. Air dates
 				// from Animap make that check strong, or AniList's full start date for an anime that hasn't aired yet (TMDB
 				// has to date its first episode that day), or for a one-episode anime its start year (a movie found has to
@@ -2586,7 +2678,7 @@ function init(): void {
 				const unaired = !!(start?.year && start.month && start.day) && !Object.keys(metadata?.episodes ?? {}).some((k) => /^\d+$/.test(k));
 				const single = !!start?.year && (Number(media?.episodes) || 0) <= 1;
 				const dated = unaired || single || Object.keys(metadata?.episodes ?? {}).some((k) => !!metadata?.episodes?.[k]?.airDate);
-				if (mapping.status === "failed" && !override.tmdbId) {
+				if (mapping.status === "failed" && !override.tmdbId && !override.tmdbNone) {
 					const custom = mediaId >= 0x80000000; // custom sources have no mappings, the title is all there is
 					const { found, firstValid } = await searchTmdb(
 						mediaId, media, metadata, session, undefined, dated || custom || fillsMissing(mediaId), mapping.tmdbId ? [mapping.tmdbId] : [], scope,
@@ -2605,8 +2697,11 @@ function init(): void {
 					log.warn(`${mediaId}: TMDB request failed, keeping the previous match:`, e);
 					return { ...result, record: old };
 				}
-				mapping = { status: "failed", reason: (e as Error).message, map: {} };
+				// Episodes pointed at their own show or movie don't need the anime's (e.g. its ID no longer loads)
+				mapping = { status: "failed", reason: (e as Error).message, map: overrideEpisodes(override, {}, undefined) };
 			}
+			// Episodes whose override says "none": no still or fill-in, whatever the match
+			for (const o of override.episodeOverrides) if (o.tmdbNone && o.aniDBEpisode) delete mapping.map[o.aniDBEpisode];
 
 			if (mapping.status === "matched") report(mediaId, `Fetching TMDB ${mapping.tmdbId}'s episodes and stills`);
 			const images: Record<string, string> = {};
@@ -2645,7 +2740,8 @@ function init(): void {
 			// metadata, only for the episodes (or the movie) it has no overview or thumbnail for.
 			let episodes: CEM.ThumbnailRecord["episodes"];
 			const gapList = isOn("tmdb-fill-missing") ? gapKeys(mediaId) : [];
-			if (isOn("tmdb-fill-missing") && mapping.status === "matched") {
+			// A failed match's episodes are only the ones their overrides point at
+			if (isOn("tmdb-fill-missing")) {
 				const all = fillsMissing(mediaId);
 				const gaps = all ? [] : gapList;
 				// Aired main episodes Animap doesn't list yet count as gaps too. Aired by TMDB's date, or by AniList's next
@@ -2745,7 +2841,8 @@ function init(): void {
 				}
 			}
 
-			const shown = (r: CEM.ThumbnailRecord | undefined) => (r?.status === "matched" ? stableJson([r.images, r.episodes ?? {}]) : "");
+			// No record shows as much as one without stills or fill-in: a first match with nothing to show rebuilds nothing
+			const shown = (r: CEM.ThumbnailRecord | undefined) => stableJson([r?.images ?? {}, r?.episodes ?? {}]);
 			const imagesChanged = (isOn("tmdb-thumbnails") || fillsMissing(mediaId) || !!record.episodes || !!old?.episodes) && (flagged || shown(old) !== shown(record));
 			// Whether Seanime has metadata for it doesn't change with what was written. Not known yet: the metadata loaded
 			// above already answers it (without a status the hook didn't supply it), so there's no need to clear Seanime's
@@ -2791,11 +2888,11 @@ function init(): void {
 			const out: ("TMDB" | "AniDB")[] = [];
 			if (tmdb.overrides.get(mediaId).ignoreWarnings) return out;
 			const record = thumbnails.get(mediaId);
-			if (record?.status === "failed" && wantsMatch(mediaId)) out.push("TMDB");
+			if (record?.status === "failed" && wantsMatch(mediaId) && !tmdb.overrides.get(mediaId).tmdbNone) out.push("TMDB");
 			const seanime = $store.get(`CEM_SEANIME_ANIDB_${mediaId}`);
 			const match = anidbStore.get(mediaId);
 			// The lookup only runs for anime Seanime has no AniDB ID for; one Seanime has since got isn't missing
-			if (anidbLookup() && !Number(seanime) && match?.status === "none" && !tmdb.overrides.get(mediaId).anidbId) out.push("AniDB");
+			if (anidbLookup() && !Number(seanime) && match?.status === "none" && !tmdb.overrides.get(mediaId).anidbId && !tmdb.overrides.get(mediaId).anidbNone) out.push("AniDB");
 			return out;
 		}
 		const problemText = (missing: ("TMDB" | "AniDB")[]) =>
@@ -2817,6 +2914,13 @@ function init(): void {
 				const offset = tmdb.overrides.get(mediaId).anidbOffset;
 				return found(`AniDB ID: ${override}, your override.`, [`Your override in this tab sets AniDB ${override}${offset ? `, offset +${offset}` : ""}`, "Used as given: nothing is looked up"]);
 			}
+			if (tmdb.overrides.get(mediaId).anidbNone)
+				return {
+					text: "AniDB ID: none, your override",
+					state: "off",
+					title: "Why no AniDB ID has been looked up",
+					steps: ["Your override in this tab sets none: nothing is looked up on AniDB or added to Seanime's metadata", "An AniDB ID Seanime has itself stays"],
+				};
 			const match = anidbStore.get(mediaId);
 			const seanime = Number($store.get(`CEM_SEANIME_ANIDB_${mediaId}`)) || 0;
 			// Seanime's own: the AniDB ID in its Animap data (unless it's the one the plugin added)
@@ -2825,6 +2929,13 @@ function init(): void {
 					`Seanime's metadata from Animap has AniDB ${seanime} for this anime`,
 					"Nothing to look up: the plugin only looks for an AniDB ID when Seanime's metadata has none",
 				]);
+			if (mediaId >= 0x80000000)
+				return {
+					text: "AniDB ID: not looked up for custom entries",
+					state: "off",
+					title: "Why no AniDB ID has been looked up",
+					steps: ["Custom sources provide their own metadata: nothing is looked up, only an AniDB ID entered here is used"],
+				};
 			if (!anidbLookup())
 				return {
 					text: "AniDB ID: automatic lookup has been disabled",
@@ -2873,7 +2984,9 @@ function init(): void {
 							: "Enter TMDB's API Read Access Token in the plugin settings",
 					"Until then nothing is looked up on TMDB",
 				]);
-			const overridden = !!tmdb.overrides.get(mediaId).tmdbId;
+			if (tmdb.overrides.get(mediaId).tmdbNone)
+				return off("none, your override", ["Your override in this tab sets none: nothing is looked up on TMDB for this anime", "Episodes with their own TMDB ID still use it"]);
+			const overridden = tmdbOverridden(mediaId);
 			if (!wantsMatch(mediaId))
 				return off(overridden ? "your override, used once stills or fill-in are on" : "stills and fill-in are off", [
 					"TMDB stills and fill-in are both off in the plugin settings: nothing is matched, and a match from before isn't used",
@@ -2936,20 +3049,32 @@ function init(): void {
 			await detectMissing(mediaId);
 			if (await needsAnidb(mediaId)) await refreshAnidb(mediaId, true);
 			// TMDB with its switches on, or from a TMDB override (by hand, with a token)
-			const byTmdb = tmdbOn() || (!!tmdb.API_KEY && !!tmdb.overrides.get(mediaId).tmdbId);
+			const byTmdb = tmdbOn() || (!!tmdb.API_KEY && tmdbOverridden(mediaId));
 			const result: RefreshResult = byTmdb ? await refreshAnime(mediaId, false, true) : { saved: 0, written: [], missing: [] };
 			// TMDB's dates may let AniDB's ID be checked better (only redone when there are more of them)
 			if (byTmdb && (await needsAnidb(mediaId))) await refreshAnidb(mediaId);
 			scheduleRebuild(true);
 			const record = result.record;
 			if (!record) return `Refreshed. ${anidbStatus(mediaId).text}`;
-			if (record.status === "failed") throw new Error(record.reason ?? "Couldn't match this anime on TMDB.");
+			if (record.status === "failed") {
+				const none = tmdb.overrides.get(mediaId).tmdbNone;
+				const overridden = Object.keys(record.map).length;
+				if (!overridden && !none) throw new Error(record.reason ?? "Couldn't match this anime on TMDB.");
+				const episodes = overridden ? `, ${overridden} episode${overridden === 1 ? "" : "s"} from their own override` : "";
+				return `Refreshed: ${none ? "TMDB set to none by your override" : "no TMDB match for the anime"}${episodes}.`;
+			}
 			return `Refreshed: TMDB ${record.tmdbId}, ${Object.keys(record.images).length} stills${result.saved ? `, ${result.saved} episodes written` : ""}.`;
 		}
 
+		/** A TMDB ID (or "none") in the anime's overrides, its own or an episode's: matched by hand, whatever the switches say */
+		const tmdbOverridden = (mediaId: number) => {
+			const override = tmdb.overrides.get(mediaId);
+			return !!override.tmdbId || !!override.tmdbNone || override.episodeOverrides.some((o) => !!o.tmdbId);
+		};
+
 		/** After overrides change: rematch straight away, writing metadata only if the automatic refresh would. */
 		function rematch(mediaId: number) {
-			if (!wantsMatch(mediaId) && !(tmdb.API_KEY && tmdb.overrides.get(mediaId).tmdbId)) return;
+			if (!wantsMatch(mediaId) && !(tmdb.API_KEY && tmdbOverridden(mediaId))) return;
 			log.step(`${mediaId}: overrides changed, matching again`);
 			refreshAnime(mediaId, false, true)
 				.then(() => tray.update())
@@ -3802,12 +3927,16 @@ function init(): void {
 		 * remembered for 14 days.
 		 */
 		async function resolveAnidb(mediaId: number, force = false, scope: Scope = "page"): Promise<CEM.AnidbMatch | undefined> {
-			if (mediaId >= 0x80000000) return undefined;
 			const override = tmdb.overrides.get(mediaId);
 			const existing = anidbStore.get(mediaId);
 			const now = Date.now();
 			const fresh = (m?: CEM.AnidbMatch) => !!m && now - m.checkedAt < 14 * DAY;
 
+			// "none": nothing looked up, and what was found before is forgotten
+			if (override.anidbNone) {
+				if (existing) saveAnidb(mediaId, null);
+				return undefined;
+			}
 			if (override.anidbId) {
 				const offset = override.anidbOffset ?? 0;
 				if (!force && existing?.status === "override" && existing.aid === override.anidbId && existing.offset === offset && fresh(existing)) return existing;
@@ -3837,7 +3966,8 @@ function init(): void {
 				saveAnidb(mediaId, null);
 				return anidbLookup() ? resolveAnidb(mediaId, force, scope) : undefined;
 			}
-			if (!anidbLookup()) return undefined;
+			// Custom sources provide their own metadata: only your override, never a lookup
+			if (!anidbLookup() || mediaId >= 0x80000000) return undefined;
 
 			// TMDB's air dates that may count as evidence (see anidbEvidence): a match looked up with fewer is checked again
 			// once there are more (a verified one kept from before this was counted: as with none)
@@ -3923,7 +4053,9 @@ function init(): void {
 		 * anime but not its AniDB entry). An ID the plugin added itself still counts as missing, so it stays maintained.
 		 */
 		async function needsAnidb(mediaId: number) {
-			if (mediaId >= 0x80000000) return false;
+			// "none": only to forget a match from before
+			if (tmdb.overrides.get(mediaId).anidbNone) return !!anidbStore.get(mediaId);
+			if (mediaId >= 0x80000000) return !!tmdb.overrides.get(mediaId).anidbId || anidbStore.get(mediaId)?.status === "override";
 			if (animap.get(mediaId)?.fallback) return true;
 			if (!anidbLookup() && !tmdb.overrides.get(mediaId).anidbId) return false;
 			// Seanime's own ID, as onAnimeMetadata last saw it (before the plugin adds one)
@@ -3959,8 +4091,10 @@ function init(): void {
 			const refs = tmdb.overrides.media.fieldRefs;
 			const { media, metadata } = await loadAnime(mediaId);
 
+			// A source set to "none" is left as it is
+			const none = { tmdb: noneIn(refs, NONE_FIELDS.media.tmdb), anidb: noneIn(refs, NONE_FIELDS.media.anidb) };
 			// AniDB ID: only when Seanime has none for this anime and the field is empty
-			const knownAnidb = metadata?.mappings?.anidbId;
+			const knownAnidb = none.anidb ? undefined : metadata?.mappings?.anidbId;
 			let anidbFound = "";
 			if (knownAnidb && !refs.anidbId.current.trim()) {
 				// Already known (Seanime's own, or one the plugin verified): show it, with the plugin's offset if it's ours
@@ -3968,7 +4102,7 @@ function init(): void {
 				refs.anidbId.setValue(`${knownAnidb}`);
 				refs.anidbOffset.setValue(ours?.aid === knownAnidb && ours.offset ? `${ours.offset}` : "");
 				anidbFound = `AniDB ${knownAnidb} from ${ours?.aid === knownAnidb ? `${ours.from ?? "the plugin's lookup"}` : "Seanime's metadata"}.`;
-			} else if (!knownAnidb && !refs.anidbId.current.trim() && mediaId < 0x80000000) {
+			} else if (!none.anidb && !knownAnidb && !refs.anidbId.current.trim() && mediaId < 0x80000000) {
 				const found = await findAnidb(mediaId, media, metadata);
 				if (found.aid) {
 					refs.anidbId.setValue(`${found.aid}`);
@@ -3981,9 +4115,9 @@ function init(): void {
 				}
 			}
 			// Without a TMDB token only the AniDB ID is filled
-			if (!tmdb.API_KEY) {
+			if (!tmdb.API_KEY || none.tmdb) {
 				if (anidbFound) return ctx.toast.success(`Filled ${anidbFound} Review it and press Save.`);
-				return ctx.toast.info("The AniDB ID field is already filled in: nothing to look up.");
+				return ctx.toast.info(none.tmdb ? "TMDB is set to none and the AniDB ID field is filled in: nothing to look up." : "The AniDB ID field is already filled in: nothing to look up.");
 			}
 
 			const typed = parseTmdbId(refs.tmdbId.current);
@@ -4393,7 +4527,8 @@ function init(): void {
 		if (!e.animeMetadata.episodes) e.animeMetadata.episodes = {};
 
 		const record = $shared.use<CEM.ThumbnailStore>("thumbnails").get(e.mediaId);
-		const matched = record?.status === "matched" && $shared.use<() => boolean>("tmdbUsable")();
+		// A failed match only holds the episodes their overrides point at
+		const matched = !!record && $shared.use<() => boolean>("tmdbUsable")();
 		// The episode list the plugin supplies (no Animap entry): nothing in it is Seanime's own but AniDB's air dates
 		const supplied = !!$shared.use<CEM.AnimapStore>("animap").get(e.mediaId)?.fallback;
 		const fillOn = $getUserPreference("tmdb-fill-missing") === "true";
@@ -4430,7 +4565,7 @@ function init(): void {
 		$store.set(`CEM_SEANIME_ANIDB_${e.mediaId}`, supplied ? 0 : mappings.anidbId || 0);
 		const { aid, anidb, own } = $shared.use<AnidbInUse>("anidbInUse")(e.mediaId);
 		let injected = 0;
-		if (!mappings.anidbId && e.mediaId < 0x80000000) {
+		if (!mappings.anidbId) {
 			if (aid) {
 				mappings.anidbId = injected = aid;
 				for (const [n, eid] of Object.entries(own?.eids ?? {})) {

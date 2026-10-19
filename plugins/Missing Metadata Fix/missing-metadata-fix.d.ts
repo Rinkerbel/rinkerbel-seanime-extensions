@@ -247,6 +247,10 @@ declare namespace CEM {
 		anidbOffset?: number;
 		/** No tray badge or Overrides dot for this anime's missing TMDB match or AniDB ID. */
 		ignoreWarnings?: boolean;
+		/** "none" entered: no TMDB match for this anime, nothing looked up (episodes with their own TMDB ID still apply). */
+		tmdbNone?: boolean;
+		/** "none" entered: no AniDB ID for this anime, nothing looked up or added (Seanime's own stays). */
+		anidbNone?: boolean;
 		episodeOverrides: {
 			aniDBEpisode?: string;
 			tmdbId?: number;
@@ -260,6 +264,10 @@ declare namespace CEM {
 			/** That AniDB episode's ID and data, as AniDB had them when saved (the metadata hook can't fetch) */
 			anidbEid?: number;
 			anidb?: { title?: string; airDate?: string; length?: number; summary?: string };
+			/** "none" entered: no TMDB still or fill-in for this episode */
+			tmdbNone?: boolean;
+			/** "none" entered: no AniDB data or episode ID for this episode */
+			anidbNone?: boolean;
 		}[];
 	}
 
