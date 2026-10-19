@@ -20,7 +20,7 @@
 			],
 			"allow": {
 				"networkAccess": {
-					"allowedDomains": ["api.themoviedb.org","api.ani.zip","proxy.ani.zip", "animeapi.my.id", "animap.id","anime.clap.ing"],
+					"allowedDomains": ["api.themoviedb.org", "api.ani.zip", "proxy.ani.zip", "animeapi.my.id", "animap.id", "anime.clap.ing"],
 					"reasoning": "api.themoviedb.org: finds each anime on TMDB and reads its episode stills, titles, overviews, air dates and runtimes. api.ani.zip, animeapi.my.id and animap.id: look up an anime's TMDB and AniDB IDs. proxy.ani.zip: reads AniDB's episode lists (air dates, English titles, summaries) to check an AniDB ID and fill in missing episode data. anime.clap.ing: checks whether Animap, Seanime's own metadata source, has an entry for an anime, the way Seanime asks it."
 				}
 			}
