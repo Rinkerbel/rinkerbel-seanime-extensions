@@ -20,7 +20,7 @@ Everything runs on its own once it's set up: open an anime, or keep watching you
 1. In Seanime, open **Extensions**, add an extension by URL, and paste the manifest URL:
 
    ```txt
-   https://raw.githubusercontent.com/rinkerbel/seanime-extensions-claude/main/plugins/Missing%20Metadata%20Fix/missing-metadata-fix.json
+   https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/missing-metadata-fix.json
    ```
 
 2. Grant the permissions it asks for. It needs:
