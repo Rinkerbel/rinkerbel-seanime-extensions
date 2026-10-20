@@ -10,6 +10,7 @@
 	"icon": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/icon.png",
 	"website": "",
 	"lang": "en",
+	"readme": "https://github.com/rinkerbel/rinkerbel-seanime-extensions/tree/main/plugins/Missing%20Metadata%20Fix",
 	"payloadURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/provider.min.js",
 	"plugin": {
 		"version": "1",

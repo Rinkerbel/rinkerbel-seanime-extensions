@@ -743,7 +743,7 @@ function init(): void {
 				}
 				if (overview.length) update.overview = overview;
 				if (image.length) {
-					if (!/^https?:\/\/[^\s]+\.(jpg|jpeg|png|gif)$/i.test(image)) throw new Error(`Field image is invalid. Please enter a valid image URL.`);
+					if (!/^https?:\/\/\S+$/i.test(image)) throw new Error(`Field image is invalid. Please enter an http(s) URL without spaces.`);
 					update.image = image;
 				}
 
@@ -2708,8 +2708,8 @@ function init(): void {
 			const found: Record<string, TMDBEpisode> = {};
 			const today = Math.floor(now / DAY);
 			const nextEpisode = Number(media?.nextAiringEpisode?.episode) || 0;
-			// A just-aired episode without a still or overview: TMDB's CDN may serve a copy up to 6 hours old, so the
-			// season is fetched again past it (episodes from the last 14 days only)
+			// A just-aired episode without a still or overview: TMDB's API may serve a cached copy of its season that lags
+			// hours behind, so the season is fetched again past it (episodes from the last 14 days only)
 			const freshlyAired = (key: string) => {
 				if (!/^\d+$/.test(key)) return false;
 				const day = toDay(metadata?.episodes?.[key]?.airDate);
@@ -3190,7 +3190,7 @@ function init(): void {
 			return out;
 		}
 
-		/** TMDB IDs known for an AniList anime, most trusted first: Animap, ani.zip, AnimeAPI. */
+		/** TMDB IDs known for an AniList anime, most trusted first: Animap, ani.zip (AnimeAPI's comes apart, see animeapiIds). */
 		async function knownIds(mediaId: number, metadata?: $app.Metadata_AnimeMetadata) {
 			const ids: { id: number; from: string; type?: "tv" | "movie" }[] = [];
 			const add = (id: number | undefined, from: string, type?: "tv" | "movie") => {
@@ -3202,14 +3202,17 @@ function init(): void {
 				} catch {}
 			}
 			add(Number((metadata?.mappings?.themoviedbId ?? "").replace(/\D/g, "")) || undefined, "Animap");
-			if (mediaId < 0x80000000) {
-				add((await anizip(mediaId)).tmdbId, "ani.zip");
-				if (!ids.length) {
-					const api = await animeapi(mediaId);
-					add(api.tmdbId, "AnimeAPI", api.tmdbType === "tv" || api.tmdbType === "movie" ? api.tmdbType : undefined);
-				}
-			}
+			if (mediaId < 0x80000000) add((await anizip(mediaId)).tmdbId, "ani.zip");
 			return ids;
+		}
+		/**
+		 * AnimeAPI's TMDB ID for an AniList anime. Its public instance allows few requests, so it's asked only once every ID
+		 * found before it has been tried without a match (a wrong Animap ID mustn't keep it from being asked).
+		 */
+		async function animeapiIds(mediaId: number): Promise<{ id: number; from: string; type?: "tv" | "movie" }[]> {
+			if (mediaId >= 0x80000000) return [];
+			const api = await animeapi(mediaId);
+			return api.tmdbId ? [{ id: api.tmdbId, from: "AnimeAPI", ...(api.tmdbType === "tv" || api.tmdbType === "movie" ? { type: api.tmdbType } : {}) }] : [];
 		}
 
 		/** Whether TMDB has any still (or a movie backdrop) for a mapping's episodes. Seasons are already cached. */
@@ -3343,11 +3346,14 @@ function init(): void {
 			if (only) return { found: await attempt(only.id, only.from, false, only.type), firstValid };
 			for (const id of skip) tried.push(`${id}`);
 
-			// This anime's own mappings, then its parent's and prequels' (checked against this anime's air dates)
+			// This anime's own mappings, then its parent's and prequels' (checked against this anime's air dates). An ID
+			// already tried (skip) isn't tried again.
 			let found: Awaited<ReturnType<typeof attempt>>;
-			for (const candidate of await knownIds(mediaId, metadata)) {
-				found = await attempt(candidate.id, candidate.from, false, candidate.type);
-				if (found) return { found, firstValid };
+			for (const list of [() => knownIds(mediaId, metadata), () => animeapiIds(mediaId)]) {
+				for (const candidate of await list()) {
+					found = await attempt(candidate.id, candidate.from, false, candidate.type);
+					if (found) return { found, firstValid };
+				}
 			}
 			// Related anime need AniList (one blocking request per uncached step, spaced out in the background)
 			const related = await relatedAnime(mediaId, scope);
@@ -3360,9 +3366,11 @@ function init(): void {
 					{ id: theirs.tmdbId, from: "its override", type: theirs.tmdbType },
 					{ id: own?.status === "matched" ? own.tmdbId : undefined, from: "its TMDB match", type: own?.tmdbType },
 				].filter((c): c is { id: number; from: string; type: "tv" | "movie" | undefined } => !!c.id);
-				for (const candidate of (settled as { id: number; from: string; type?: "tv" | "movie" }[]).concat(await knownIds(r.id))) {
-					found = await attempt(candidate.id, `${r.relation} "${r.title}" (${candidate.from})`, true, candidate.type);
-					if (found) return { found, firstValid };
+				for (const list of [async () => (settled as { id: number; from: string; type?: "tv" | "movie" }[]).concat(await knownIds(r.id)), () => animeapiIds(r.id)]) {
+					for (const candidate of await list()) {
+						found = await attempt(candidate.id, `${r.relation} "${r.title}" (${candidate.from})`, true, candidate.type);
+						if (found) return { found, firstValid };
+					}
 				}
 			}
 			if (!titleSearch) return { found, firstValid };
@@ -3457,7 +3465,10 @@ function init(): void {
 			lastCalls[service] = Date.now();
 		}
 
-		/** animap.id's AniDB ID for an AniList anime. Its data is anime-offline-database's: the ID is in a sources URL. */
+		/**
+		 * animap.id's AniDB ID for an AniList anime: it maps AniList IDs to other sites, and the AniDB ID is read from the
+		 * anidb.net/anime/<id> URL in its "sources".
+		 */
 		async function animapIdAnidb(mediaId: number): Promise<number | undefined> {
 			await spaced("animap.id", 1500);
 			try {
@@ -3825,7 +3836,7 @@ function init(): void {
 				["ani.zip", async () => (await anizip(mediaId)).anidbId],
 				["AnimeAPI", async () => (await animeapi(mediaId)).anidbId],
 				// animap.id is its own site (AniList -> AniDB links), not the Animap behind Seanime's metadata
-				["the animap.id site", () => animapIdAnidb(mediaId)],
+				["animap.id", () => animapIdAnidb(mediaId)],
 			];
 			// Parent and prequels last, looked up only if this anime's own IDs gave nothing usable
 			const own = only ? Infinity : sources.length;
@@ -3842,7 +3853,7 @@ function init(): void {
 							}
 						}, ownMain],
 						[`${label} (ani.zip)`, async () => (await anizip(related.id)).anidbId, ownMain],
-						[`${label} (the animap.id site)`, () => animapIdAnidb(related.id), ownMain],
+						[`${label} (animap.id)`, () => animapIdAnidb(related.id), ownMain],
 					);
 				}
 			};
