@@ -231,6 +231,7 @@ declare namespace CEM {
 		tmdbId?: number;
 		/** The TMDB ID's type, when it's known (entered as "movie/123", or found as one): TV and movie IDs overlap. */
 		tmdbType?: "tv" | "movie";
+		/** The season, seasons, ranges and offset below are all entered in the Media tab's TMDB Episodes field. */
 		tmdbSeason?: number;
 		/** Several TMDB seasons read as one run of episodes (tmdbSeason is the first). Offset counts across all of them. */
 		tmdbSeasons?: number[];
@@ -239,17 +240,27 @@ declare namespace CEM {
 		 * the first range's). A range without an end episode runs to the end of its last season. Offset counts across it.
 		 */
 		tmdbRanges?: TMDBRange[];
-		/** Added to the AniDB episode number to get the TMDB episode number (main episodes only). */
+		/**
+		 * Added to this anime's episode number to get the TMDB episode number (main episodes only): "S6E2" is 1,
+		 * "1778=S27E1" is -1777.
+		 */
 		tmdbOffset?: number;
-		/** Real AniDB ID, for anime Seanime has no metadata for. */
+		/** Real AniDB ID; replaces one Seanime has itself. */
 		anidbId?: number;
-		/** Added to this anime's episode number to get the AniDB main episode number (e.g. a second AniList part). */
+		/**
+		 * Added to this anime's episode number to get the AniDB episode number, entered in the AniDB Episodes field: "13"
+		 * is 12 (e.g. a second AniList part), "5=1" is -4.
+		 */
 		anidbOffset?: number;
+		/** The offset counts in AniDB's specials (S1 onwards) instead of its main ones: entered as "S1" or "S3". */
+		anidbSpecials?: boolean;
+		/** The offset counts in AniDB's "other" episodes (O1 onwards) instead of its main ones: entered as "O1" or "O4". */
+		anidbOthers?: boolean;
 		/** No tray badge or Overrides dot for this anime's missing TMDB match or AniDB ID. */
 		ignoreWarnings?: boolean;
 		/** "none" entered: no TMDB match for this anime, nothing looked up (episodes with their own TMDB ID still apply). */
 		tmdbNone?: boolean;
-		/** "none" entered: no AniDB ID for this anime, nothing looked up or added (Seanime's own stays). */
+		/** "none" entered: no AniDB ID for this anime, nothing looked up or added, and Seanime's own left out. */
 		anidbNone?: boolean;
 		episodeOverrides: {
 			aniDBEpisode?: string;
@@ -360,6 +371,8 @@ declare namespace CEM {
 		main: AnidbEpisode[];
 		/** Specials (S1 as n 1). */
 		specials: AnidbEpisode[];
+		/** Other episodes (O1 as n 1, e.g. a TV cut of the entry's movies); missing in entries cached before they were kept. */
+		others?: AnidbEpisode[];
 		/** The MyAnimeList entries AniDB links (several for an entry MAL splits into parts). */
 		malIds: number[];
 	}
@@ -379,6 +392,8 @@ declare namespace CEM {
 		episodes?: Record<string, { title?: string; airDate?: string; length?: number; summary?: string }>;
 		/** The episodes are the AniDB entry's specials (a related anime has its main episodes), S1 onwards plus the offset. */
 		specials?: boolean;
+		/** The episodes are the AniDB entry's other episodes, O1 onwards plus the offset (only from your override). */
+		others?: boolean;
 		from?: string;
 		reason?: string;
 		/** How many of TMDB's air dates it had; checked again once TMDB has more (they're tried on their own too). */
@@ -392,7 +407,7 @@ declare namespace CEM {
 		checkedAt: number;
 	}
 
-	/** One step up an anime's parent/prequel chain, from AniList, cached for 30 days. */
+	/** One step up from an anime on AniList (parent, prequel or alternative version), cached for 30 days. */
 	interface RelationStep {
 		/** episodes: AniList's episode count for it (0 when unknown; missing in steps cached before it was kept). */
 		next: { id: number; title: string; relation: string; episodes?: number } | null;

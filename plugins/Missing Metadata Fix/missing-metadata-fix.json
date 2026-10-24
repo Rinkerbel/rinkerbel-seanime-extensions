@@ -1,9 +1,9 @@
 {
 	"id": "missing-metadata-fix",
 	"name": "Missing Metadata Fix",
-	"version": "2.1.1",
+	"version": "2.2.0",
 	"manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/missing-metadata-fix.json",
-	"language": "javascript",
+	"language": "typescript",
 	"type": "plugin",
 	"description": "Customize episode metadata of anime in your AniList collection.",
 	"author": "nnotwen, rinkerbel",
@@ -11,7 +11,7 @@
 	"website": "",
 	"lang": "en",
 	"readme": "https://github.com/rinkerbel/rinkerbel-seanime-extensions/tree/main/plugins/Missing%20Metadata%20Fix",
-	"payloadURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/provider.min.js",
+	"payloadURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/provider.ts",
 	"plugin": {
 		"version": "1",
 		"permissions": {
@@ -93,6 +93,12 @@
 				"label": "Look up missing AniDB IDs (checked against AniDB's air dates)",
 				"type": "switch",
 				"default": "true"
+			},
+			{
+				"name": "debug-to-log",
+				"label": "Developer mode (writes every step to seanime.log and adds a Debug button to Overrides; turn it off afterwards)",
+				"type": "switch",
+				"default": "false"
 			}
 		]
 	}

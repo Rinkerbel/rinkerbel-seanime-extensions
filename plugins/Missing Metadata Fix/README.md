@@ -36,6 +36,7 @@ Everything runs on its own once it's set up: open an anime, or keep watching you
 | Replace episode thumbnails with TMDB stills | off | Shows TMDB's stills instead of Seanime's thumbnails. |
 | Fill in episode metadata from TMDB when Seanime has none | off | Fills in episodes that lack a title, summary, thumbnail or length, and adds aired episodes Seanime's list is missing. |
 | Look up missing AniDB IDs | on | Looks for an AniDB ID when Seanime's metadata has none. An ID is only used when AniDB's air dates prove it's the right one. |
+| Developer mode | off | Writes every step the plugin takes to Seanime's log file and adds a Debug button to Overrides. For reporting a problem: see below. |
 
 The two TMDB switches turn on the automatic TMDB matching, and the AniDB switch turns on the automatic AniDB lookup.
 With a switch off, its stored matches stay on disk unused. The manual tools still work with the switches off: AniDB
@@ -87,43 +88,64 @@ greyed out in them.
 | Field | Accepts |
 | --- | --- |
 | TMDB ID | `s1429` (a show), `m371371` (a movie), a TMDB link, or a plain number. TMDB's show and movie IDs overlap, so the prefix settles which one is meant. |
-| TMDB Season | One season (`2`), several seasons read as one run (`1-4, 6`), or episode ranges in TMDB's order (`S1E2-S1E4, S1E7`, `S1E6-S2` to the end of season 2, `S3` for all of season 3, `S1E1-5`). Specials (S0) go in episode overrides. |
-| TMDB Offset | Added to the episode number to get TMDB's (main episodes only). With several seasons it counts across all of them. |
+| TMDB Episodes | Where the episodes are on TMDB. One season (`S2`), several seasons read as one run (`S1-S4, S6`), where episode 1 lands (`S6E2`: episode 1 is S6E2, episode 2 is S6E3, and so on), or episode ranges in TMDB's order (`S1E2-S1E4, S1E7`, `S1E6-S2` to the end of season 2, `S1E1-5`). Specials work the same way (`S0E66-S0E68, S0E70-S0E75`); season 0 comes first in TMDB's order. Seasons work without their `S` too (`2`, `1-4, 6`). |
 | AniDB ID | The AniDB anime ID to use. |
-| AniDB Offset | Added to the episode number to get AniDB's (e.g. `12` for an AniList "part 2" that AniDB keeps in one entry). |
+| AniDB Episodes | Where episode 1 lands on AniDB: a main episode (`13`, for an AniList "part 2" that AniDB keeps in one entry), a special (`S1`) or an "other" episode (`O1`, for an entry like Girls und Panzer: Motto Love Love Sakusen Desu!, whose TV episodes AniDB lists as O1-O12 beside its four movies). Empty means main episode 1. |
+
+The Media tab's **What the fields take** link, at the end of its description, shows these examples in the plugin.
+
+**Starting later than episode 1.** Put the episode number and `=` in front to say which episode lands there instead.
+Doraemon (1979) has 1787 episodes, and episode 1778 is TMDB's S27E1: TMDB Episodes `1778=S27E1`. The episodes before
+it get nothing from TMDB. It works before a season list or ranges too (`11=S1-S4, S6`), and in AniDB Episodes (`5=1`:
+episode 5 is AniDB's episode 1). Without a number and `=`, it's episode 1: `S6E2` is the same as `1=S6E2`.
 
 - **Status lines.** Above each source a line says where its match came from. The dot is **green** (found),
   **orange** (failed), **red** (off or can't be looked up) or **blue** (not looked up yet). Click it to see every
-  step the last lookup took.
+  step the last lookup took. A match in more than three parts shows its first two and its last; the steps list them
+  all.
 - **Ignore warnings for this anime** hides its orange dot and badge.
-- **Auto-fill** looks the IDs, season and offset up and fills them in without saving.
+- **Auto-fill** looks the IDs and episodes up and fills them in without saving.
 - **Refresh** redoes the automatic matches now.
-- **Save** applies the override and rematches straight away.
-- **Delete** removes the media override but keeps the episode overrides.
+- **Save** applies the override and matches TMDB and AniDB again straight away.
+- **Delete** removes the media override, a `none` included, but keeps the episode overrides. TMDB and AniDB are
+  matched again straight away.
 
 **Episode tab.** Shown when you open Overrides from the episode editor. It points one episode somewhere else, over
 the media override and any range.
 
 - **TMDB ID, Season and Episode:** `m<id>` makes the episode a TMDB movie, for anime whose episodes are separate
   movies.
-- **AniDB ID and AniDB Episode:** the episode is a number or a special like `S3`. Both are checked against AniDB when
+- **AniDB ID and AniDB Episode:** the episode is a number, a special like `S3` or another episode like `O5`. Both are checked against AniDB when
   you save. The AniDB ID defaults to the anime's own.
 
 **`none`.** Type `none` in any TMDB or AniDB field, on either tab, to leave that source out. The source's other
-fields empty and grey out. After saving, `none` shows in the ID field; delete it and save again to undo.
+fields empty and grey out. After saving, `none` shows in the ID field. To undo it, clear it and save, or press
+Delete.
 
-- **For the anime:** nothing is looked up there. Episodes with their own TMDB ID still use it, and an AniDB ID that
-  Seanime has itself stays.
-- **For an episode:** it gets no TMDB still or fill-in, or no AniDB data and episode ID.
+- **For the anime:** nothing is looked up there. Episodes with their own TMDB ID still use it. For AniDB, Seanime's
+  own AniDB IDs are left out too, the anime's and its episodes'. Torrent searches then go by title instead of AniDB
+  ID, and Seanime shows its "Episode metadata retrieval not available" notice for the anime.
+- **For an episode:** it gets no TMDB still or fill-in, or no AniDB data and episode ID (Seanime's own included).
 
 **Bulk Update tab.** Writes TMDB's and AniDB's data for every episode into your custom metadata, so you can edit it
 by hand.
 
-- **TMDB's data** comes from the TMDB ID and Season saved in the Media tab. Episodes with their own override use
+- **TMDB's data** comes from the TMDB ID and Episodes saved in the Media tab. Episodes with their own override use
   theirs.
 - **AniDB's data** comes from the AniDB ID in use. Its air dates replace TMDB's, and its titles, lengths and
   summaries fill in where TMDB has none.
 - This replaces the custom metadata you saved for this anime. The stills and fill-in don't need it.
+
+### Reporting a problem
+
+1. Turn on **Developer mode** in the plugin's settings.
+2. Open the anime's page (or press **Refresh** in its Overrides) so the plugin goes through it again.
+3. Press **Debug** in the Media tab of Overrides. It writes everything the plugin stored for that anime to the log.
+4. Send Seanime's log file (`seanime.log`, in Seanime's logs folder) along with the anime's AniList link and what
+   looks wrong.
+5. Turn Developer mode off again: it makes the log grow quickly.
+
+The log holds anime IDs, titles and the steps the plugin took, never your TMDB token.
 
 ---
 
@@ -224,23 +246,23 @@ flowchart TD
     start(["TMDB match"]) --> none{"Override says none?"}
     none -- yes --> noneOut["No match. Only episodes<br>with their own TMDB ID"]
     none -- no --> ov{"TMDB ID override?"}
-    ov -- yes --> ovSeason{"Season set?"}
-    ovSeason -- yes --> manual["Built from the override:<br>season, seasons or ranges + offset"]
+    ov -- yes --> ovSeason{"Episodes set?"}
+    ovSeason -- yes --> manual["Built from the override:<br>season, seasons or ranges"]
     ovSeason -- no --> dates
     ov -- no --> animapId{"Animap has<br>a TMDB ID?"}
     animapId -- yes --> dates["Air-date match"]
     animapId -- no --> search
     dates -- "failed, ID from Animap" --> search["Search for another ID"]
-    dates -- "failed, your ID" --> failed(["Failed: set the Season"])
+    dates -- "failed, your ID" --> failed(["Failed: set the TMDB Episodes"])
     dates -- matched --> done(["Stored"])
     manual --> done
     search --> own["1. This anime's other IDs:<br>ani.zip, then AnimeAPI"]
-    own --> rel["2. Parent and prequels:<br>their override, their match, their IDs"]
+    own --> rel["2. Related anime:<br>their override, their match, their IDs"]
     rel --> titles["3. TMDB title search<br>(up to 10 titles)"]
     titles --> done
 ```
 
-A TMDB ID you entered is never replaced: entered without a Season, it's matched by air date like any other, and if
+A TMDB ID you entered is never replaced: entered without TMDB Episodes, it's matched by air date like any other, and if
 that fails the match fails rather than searching for another ID.
 
 **Candidate order.** Each candidate counts only if it lines up with the anime's own air dates (next section), so a
@@ -253,8 +275,10 @@ never tried again.
      minutes, so its answers are kept for 14 days and calls are at least 20 seconds apart. A call that would come too
      soon is skipped until the next refresh.
 2. **Related anime.** Specials and later seasons often share their TMDB entry with an earlier entry.
-   - The plugin follows AniList up to **5 steps** (parent first, else the prequel). Each step is cached for 30 days;
-     in the background, AniList calls are 3 seconds apart.
+   - The plugin follows AniList up to **5 steps**: the parent first, else the prequel, else an alternative version
+     (e.g. an edited cut of an OVA). An alternative version is only taken as the first step; further up it belongs to
+     another anime, such as a first season's remake. Each step is cached for 30 days; in the background, AniList calls
+     are 3 seconds apart.
    - For each related anime it tries the TMDB ID you set in that anime's override, then the TMDB match it already
      has, then its Animap and ani.zip IDs, then its AnimeAPI ID.
    - These IDs are **borrowed** (see [*Borrowed IDs*](https://github.com/Rinkerbel/rinkerbel-seanime-extensions/tree/main/plugins/Missing%20Metadata%20Fix#borrowed-ids)).
@@ -274,11 +298,17 @@ never tried again.
      start date for an unaired anime, or a start year for a one-episode anime. Custom sources and the fill-in setting
      allow it without dates.
 
-**Show or movie.** A season override always means a show. Otherwise the type comes from:
+**Show or movie.** A TMDB Episodes override always means a show. Otherwise the type comes from:
 
 1. the override's prefix (`s`/`m`);
 2. the type a search result or AnimeAPI gave;
 3. AniList's format: a movie is tried as a TMDB movie first, everything else as a show first.
+
+Only in the last case is the type a guess. If the guess lands on a TMDB movie that came out more than a year away
+from the anime, or the anime is a TV series of several episodes, that movie isn't it, and the show with that ID is
+tried instead. If there's no
+such show, the match fails. The check allows a year either way because TMDB often dates a movie by its premiere,
+weeks or months early. A `m` prefix skips the check.
 
 **Movies.** A TMDB movie is one episode, episode 1, with its backdrop as the still.
 
@@ -289,12 +319,17 @@ A **borrowed** movie (from a related anime or a search) is rejected when:
 - its release date is more than 7 days from the anime's start date. Only the year is compared when either side has
   only a year, or TMDB dates the movie January 1st.
 
+TMDB's release date is the movie's first release anywhere, often a festival premiere weeks before it came out in
+Japan (Your Name: a US premiere on 2016-07-03, Japanese cinemas on 2016-08-26). So before rejecting a movie on its
+date, the plugin asks TMDB for its release dates and compares those the same way. It uses Japan's when TMDB lists
+any, else every country's. Premieres, cinema, streaming and TV releases count; disc releases don't.
+
 A rejected movie's **TMDB collection** is searched next: if exactly one movie in it came out within 7 days of the
 anime, that one is tried.
 
 ### TMDB: matching by air date
 
-Without a season override, the plugin works out where each episode is on TMDB by comparing air dates.
+Without a TMDB Episodes override, the plugin works out where each episode is on TMDB by comparing air dates.
 
 ```mermaid
 flowchart TD
@@ -318,7 +353,7 @@ flowchart TD
 - Seanime's air dates for the main episodes, up to tomorrow (Japan is ahead of most TMDB listings). If none has aired
   yet, every date counts, since TMDB usually lists upcoming episodes too.
 - With no dates at all, AniList's start date stands in for episode 1. With not even that, the match fails and asks
-  for a TMDB Season override.
+  for a TMDB Episodes override.
 - For an anime whose list the plugin supplies, the dates are AniDB's. They only count while the AniDB match counts as
   evidence (see [*The two matches check each other*](https://github.com/Rinkerbel/rinkerbel-seanime-extensions/tree/main/plugins/Missing%20Metadata%20Fix#the-two-matches-check-each-other-never-in-a-circle)).
 - A **finished** anime's episodes past AniList's total belong to the next AniList entry and are left out. Some AniDB
@@ -333,8 +368,10 @@ OVAs often live there). TMDB episodes another anime has as its own aren't candid
 2. For each one, it votes for the pair *(season, TMDB number − episode number)*: 2 points for the same day, 1 for a
    day apart, at most once per pair.
 3. The pair with the most points wins. It needs votes from at least 2 episodes (1 when only one date is known).
-4. **Ties** go to a regular season over the specials, then the smaller offset. When the AniDB match says these
-   episodes are AniDB specials, the specials season is preferred instead.
+4. **Ties** go to a regular season over the specials, then the smaller offset. The specials season is preferred
+   instead when the AniDB match says these episodes are AniDB specials, or when an OVA, ONA, special or movie is
+   matched with a borrowed ID. A borrowed show's main episodes belong to the anime that has it as its own, and TMDB
+   sometimes lists an OVA twice (Pico: My Little Summer Story is both S0E1 and S1E3 of Boku no Pico).
 5. Only the winner's **longest run** of episodes (each at most 4 after the one before) becomes a part. Its other runs
    can win later rounds.
 6. Rounds repeat until no pair has enough votes. So an anime spanning two TMDB seasons, or one TMDB splits
@@ -368,7 +405,8 @@ The match is then marked *by AniDB's air dates*.
 **Titles outvote dates.** When the dates matched and at least 2 episodes have real titles, the titles vote too:
 
 - An episode votes for each *(season, offset)* that puts it on a TMDB episode with the same title.
-- Titles are compared without case or punctuation. Placeholders like "Episode 4" or "第4話" don't count.
+- Titles are compared without case or punctuation. Placeholders like "Episode 4", "第4話", "Movie 2", "Part 1 of 2",
+  "Episode O1" or "Complete Movie" don't count.
 - When the top pair has at least 2 votes, more than the date match's own title hits, half of the titles at least,
   and no tie, it replaces the date match. This catches dates a week off that put every episode one too early.
 
@@ -383,7 +421,7 @@ The match is then marked *by AniDB's air dates*.
    - the anime has at least 2 episodes and no gaps in its list.
 
    Episodes then match by number.
-4. **Otherwise the match fails:** "Only N of M episodes matched … Set the TMDB Season and Offset in Overrides".
+4. **Otherwise the match fails:** "Only N of M episodes matched … Set the TMDB Episodes in Overrides".
 
 **Filling in the rest:**
 
@@ -400,10 +438,13 @@ The match is then marked *by AniDB's air dates*.
 
 ### TMDB: from the override
 
-With a TMDB ID and Season saved, nothing is guessed: episode *n* is TMDB episode *n + offset*.
+With a TMDB ID and Episodes saved, nothing is guessed: from where episode 1 lands (`S6E2`, or `S2` for S2E1), each
+episode is the next TMDB episode of that season. With `1778=S27E1`, episode 1778 is S27E1 and the ones before it get
+nothing (TMDB has no S27E-1776).
 
-- **Several seasons** (`1-4, 6`) are read as one run of episodes, only the seasons listed, nothing after them: season 2 continues where season 1 ends, and the
-  offset counts across all of them.
+- **Several seasons** (`S1-S4, S6`) are read as one run of episodes, only the seasons listed, nothing after them:
+  season 2 continues where season 1 ends. `11=S1-S4, S6` makes episode 11 the run's first. With an episode in the
+  list (`S1-S4, S6E3`) it's ranges instead.
 - **Ranges** (`S1E2-S1E4, S1E7`) pick those TMDB episodes in order. Every episode after the last range follows,
   later seasons included, so sequels to come are already covered. A range that names an episode TMDB doesn't have
   makes the match fail with that reason.
@@ -459,10 +500,11 @@ More details:
 ### AniDB: the lookup
 
 The lookup only runs when Seanime's metadata has no AniDB ID, or no metadata at all. An ID the plugin added itself
-still counts as missing, so the plugin keeps maintaining it.
+still counts as missing, so the plugin keeps maintaining it. An AniDB override applies whether Seanime has an ID or
+not.
 
 - **Custom sources** never get a lookup, only an AniDB ID you enter.
-- **`none`** forgets any match found before.
+- **`none`** forgets any match found before, and leaves Seanime's own AniDB IDs out too.
 
 ```mermaid
 flowchart TD
@@ -471,7 +513,7 @@ flowchart TD
     o -- no --> c["Candidates: ani.zip, AnimeAPI,<br>animap.id"]
     c --> chk{"Fits this anime?"}
     chk -- yes --> ok["Verified, stored for good"]
-    chk -- "none fit" --> rel["Parent and prequels:<br>Animap, ani.zip, animap.id"]
+    chk -- "none fit" --> rel["Related anime:<br>Animap, ani.zip, animap.id"]
     rel --> chk2{"Fits, past the related<br>anime's own episodes?"}
     chk2 -- yes --> ok
     chk2 -- no --> sp{"Its specials fit?"}
@@ -483,7 +525,7 @@ flowchart TD
 
 1. **This anime's own AniDB IDs** from ani.zip, AnimeAPI and animap.id. animap.id is a separate site from Seanime's
    Animap: it maps AniList IDs to other sites, and the AniDB ID is read from the AniDB link in its sources.
-2. **Only if none of those fits**, the parent and prequels (the same chain as for TMDB): each one's ID from Animap,
+2. **Only if none of those fits**, the related anime (the same chain as for TMDB): each one's ID from Animap,
    ani.zip and animap.id.
 
 The first candidate that fits wins. An ID is never used just because a related anime has it: AniDB IDs drive torrent
@@ -491,7 +533,8 @@ searches, so a wrong one would do harm.
 
 **AniDB's data** comes from AniDB's HTTP API through `proxy.ani.zip`:
 
-- main episodes and specials, with air dates, lengths, English titles and summaries;
+- main episodes, specials and other episodes (`O1`, …, only used through an override), with air dates, lengths,
+  English titles and summaries;
 - the MyAnimeList entries the AniDB entry links.
 
 It's cached for 14 days, with calls at least 1.5 seconds apart. When the first or last main episode has no date,
@@ -558,8 +601,9 @@ by the other's "none".
 Only this anime's episodes are taken from the entry: up to AniList's episode count, after the offset. AniDB's later
 episodes belong to another entry.
 
-**Your override.** An AniDB ID override is used as given, with its offset, and nothing is looked up. If the anime's
-air dates fit the entry's specials and not its main episodes, the specials are used.
+**Your override.** An AniDB ID override is used as given, with its AniDB Episodes, and nothing is looked up. It also
+replaces an AniDB ID Seanime has itself. `S1` and `O1` use the entry's specials or other episodes. Without them, if the
+anime's air dates fit the entry's specials and not its main episodes, the specials are used.
 
 ### The two matches check each other, never in a circle
 
@@ -594,15 +638,17 @@ Otherwise the request goes to Animap as usual, so the anime picks up Animap's en
 **Every build** (`onAnimeMetadata`):
 
 1. **AniDB ID.** When Seanime's metadata has none, the AniDB ID in use is added: your override, or a verified match
-   while the lookup is on.
-   - Its episode IDs are added too.
+   while the lookup is on. Your override also replaces an ID Seanime has itself.
+   - Its episode IDs are added too. With your override over Seanime's own ID, Seanime's main episodes lose their
+     episode IDs unless your override gives them one; its specials keep theirs only when the AniDB entry is the same.
    - Aired episodes AniDB has and Seanime's list lacks are added.
    - An episode override naming an AniDB episode sets that episode's ID over any other.
 2. **Fill-in.** The rules depend on which settings are on:
    - **TMDB's data** is used only with the fill-in switch on.
    - **AniDB's data** is used whenever its ID is in use.
    - Episodes with custom metadata are left alone.
-   - Each field comes from the first source that has it, and placeholder titles never count:
+   - Each field comes from the first source that has it, and placeholder titles ("Episode 4", "Movie 2", …) never
+     count:
 
    | Field | Order |
    | --- | --- |
@@ -646,7 +692,7 @@ are spaced out:
 
 | Service | Used for | Spacing and caching |
 | --- | --- | --- |
-| TMDB (`api.themoviedb.org`) | shows, seasons, movies, collections, searches | Seasons are fetched with the show details, up to 20 per request, once per refresh. On a "429 rate limit" it waits as asked and retries, up to 3 times. |
+| TMDB (`api.themoviedb.org`) | shows, seasons, movies, a movie's release dates (only when its first date doesn't fit), collections, searches | Seasons are fetched with the show details, up to 20 per request, once per refresh. On a "429 rate limit" it waits as asked and retries, up to 3 times. |
 | Animap (`anime.clap.ing`) | does Animap have the anime? | Answers kept for an hour |
 | ani.zip (`api.ani.zip`) | TMDB and AniDB IDs | Asked when needed |
 | AnimeAPI (`animeapi.my.id`) | TMDB and AniDB IDs | At least 20 s apart, answers kept 14 days |
@@ -665,7 +711,7 @@ are spaced out:
 | `ANIMAP_STATUS_V1` | whether Animap has an entry, and the episode count to supply |
 | `ANIDB_EPISODES_V1` | AniDB entries, 14 days |
 | `ANIMEAPI_CACHE_V1` | AnimeAPI answers, 14 days |
-| `ANILIST_RELATIONS_V1` | parent/prequel steps, 30 days |
+| `ANILIST_RELATIONS_V2` | parent, prequel or alternative version steps, 30 days |
 | `CEM_TMDB_TOKEN_CHECK` | TMDB's verdict on the token, kept by a fingerprint, never the token |
 | `CEM_APPLIED_SETTINGS` | the settings last applied, to notice a change |
 
