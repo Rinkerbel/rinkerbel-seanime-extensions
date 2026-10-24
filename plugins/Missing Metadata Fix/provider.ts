@@ -3563,8 +3563,8 @@ function init(): void {
 			candidates: TmdbNear["candidates"],
 		) {
 			const { mediaId, session, tmdbId, episodes, mainKeys, highest, total } = m;
-			// Undated, unaired or unmatched episodes follow the segment they sit in, but never onto a TMDB episode another
-			// episode already matched by its date
+			// Undated, unaired or unmatched episodes follow the segment they sit in. No episode, these or the ones below, goes
+			// onto a TMDB episode another one already has (e.g. one placed by its own air date).
 			segments.sort((a, b) => a.from - b.from);
 			const segmentFor = (n: number) => segments.filter((s) => s.from <= n).pop() ?? segments[0];
 			const used: Record<string, boolean> = {};
@@ -3583,14 +3583,16 @@ function init(): void {
 			const limit = seasonLimit(m, seasonEpisodes, fallback.offset);
 			for (const ep of seasonEpisodes) {
 				const n = ep.episode_number - fallback.offset;
-				if (n > highest && n <= limit && !map[`${n}`]) map[`${n}`] = { tmdbId, season: fallback.season, episode: ep.episode_number };
+				if (n <= highest || n > limit || map[`${n}`] || used[`${fallback.season}:${ep.episode_number}`]) continue;
+				map[`${n}`] = { tmdbId, season: fallback.season, episode: ep.episode_number };
+				used[`${fallback.season}:${ep.episode_number}`] = true;
 			}
 
 			// Specials only map on a single, unambiguous date match in TMDB's specials
 			for (const key of Object.keys(episodes).filter((k) => /^S\d+$/.test(k))) {
 				const day = toDay(episodes[key].airDate);
 				if (isNaN(day)) continue;
-				const hits = candidates.filter((c) => c.season === 0 && Math.abs(c.day - day) <= 1);
+				const hits = candidates.filter((c) => c.season === 0 && Math.abs(c.day - day) <= 1 && !used[`0:${c.episode}`]);
 				const exact = hits.filter((c) => c.day === day);
 				const hit = exact.length === 1 ? exact[0] : hits.length === 1 ? hits[0] : undefined;
 				if (hit) map[key] = { tmdbId, season: 0, episode: hit.episode };
