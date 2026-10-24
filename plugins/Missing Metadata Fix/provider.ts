@@ -838,15 +838,16 @@ function init(): void {
 								throw new Error(
 									aidText ? `AniDB ID "${aidText}" isn't a number.` : "Enter the AniDB ID too: this anime has none yet.",
 								);
-							if (!/^[SO]?\d+$/.test(epText))
-								throw new Error(`AniDB Episode "${epText}" isn't an episode like "12", a special like "S3" or another like "O5".`);
+							if (!new RegExp(`^[${ANIDB_LETTERS}]?\\d+$`).test(epText))
+								throw new Error(`AniDB Episode "${epText}" isn't an episode like "12", or a lettered one (${ANIDB_LETTER_LIST}).`);
+							const letter = /^\d/.test(epText) ? "" : epText[0];
 							let anime = await anidbAnime(aid);
-							// An entry cached before the other episodes were kept: fetched again for them
-							if (epText[0] === "O" && anime && !anime.others) anime = await anidbAnime(aid, true);
+							// An entry cached before every lettered type was kept: fetched again for them
+							if (letter && letter !== "S" && anime && !anime.lettered) anime = await anidbAnime(aid, true);
 							if (anime === undefined) throw new Error("Couldn't reach AniDB right now: try saving again in a minute.");
 							if (anime === null) throw new Error(`AniDB has no anime ${aid}.`);
-							const list = { S: anime.specials ?? [], O: anime.others ?? [] }[epText[0]] ?? anime.main;
-							const ep = list.find((x) => x.n === Number(epText.replace(/^[SO]/, "")));
+							const list = !letter ? anime.main : letter === "S" ? anime.specials ?? [] : anime.lettered?.[letter] ?? [];
+							const ep = list.find((x) => x.n === Number(epText.replace(/^[A-Z]/, "")));
 							if (!ep) throw new Error(`AniDB ${aid} has no episode ${epText}.`);
 							const { eid, n: _n, ...data } = ep;
 							Object.assign(update, { anidbId: aid, anidbEpisode: epText, anidbEid: eid });
@@ -869,7 +870,7 @@ function init(): void {
 						tmdbId: data.tmdbNone ? "none" : formatTmdbId(data.tmdbId, data.tmdbType),
 						tmdbEpisodes: formatTmdbEpisodes(data),
 						anidbId: data.anidbNone ? "none" : data.anidbId?.toString() ?? "",
-						anidbEpisodes: formatAnidbEpisodes({ offset: data.anidbOffset, specials: data.anidbSpecials, others: data.anidbOthers }),
+						anidbEpisodes: formatAnidbEpisodes({ offset: data.anidbOffset, specials: data.anidbSpecials, letter: data.anidbLetter }),
 					}),
 					fill: (data: Omit<CEM.TMDBOverrides, "mediaId" | "episodeOverrides">) => {
 						const refs: Record<string, $ui.FieldRef<string>> = tmdb.overrides.media.fieldRefs;
@@ -879,6 +880,8 @@ function init(): void {
 					save: (mediaId: number) => {
 						const update: Omit<CEM.TMDBOverrides, "mediaId" | "episodeOverrides"> = {};
 						const refs = tmdb.overrides.media.fieldRefs;
+						// An ID field left empty shows the ID in use (greyed out): episodes entered without an ID are that one's
+						const shown = autoPlaceholders(mediaId, null);
 						const tmdbEpisodes = refs.tmdbEpisodes.current.trim();
 						if (noneIn(refs, NONE_FIELDS.media.tmdb)) update.tmdbNone = true;
 						else {
@@ -889,6 +892,7 @@ function init(): void {
 								const episodes = parseTmdbEpisodes(tmdbEpisodes);
 								if (typeof episodes === "string") throw new Error(`TMDB Episodes: ${episodes}`);
 								Object.assign(update, episodes);
+								if (update.tmdbId === undefined && shown.tmdbId) readTmdbIdField(shown.tmdbId, update);
 							}
 						}
 						if (noneIn(refs, NONE_FIELDS.media.anidb)) update.anidbNone = true;
@@ -901,7 +905,11 @@ function init(): void {
 								if (typeof episodes === "string") throw new Error(`AniDB Episodes: ${episodes}`);
 								if (episodes.offset) update.anidbOffset = episodes.offset;
 								if (episodes.specials) update.anidbSpecials = true;
-								if (episodes.others) update.anidbOthers = true;
+								if (episodes.letter) update.anidbLetter = episodes.letter;
+								if (!update.anidbId) {
+									if (!Number(shown.anidbId)) throw new Error("Enter the AniDB ID too: this anime has none yet.");
+									update.anidbId = Number(shown.anidbId);
+								}
 							}
 						}
 
@@ -1639,6 +1647,9 @@ function init(): void {
 			episode: { tmdb: ["tmdbId", "tmdbSeason", "tmdbEpisode"], anidb: ["anidbId", "anidbEpisode"] },
 		};
 		const isNone = (value: string) => value.trim().toLowerCase() === "none";
+		/** The letters AniDB numbers its episode types with: specials, credits (openings, endings), trailers, parodies, other */
+		const ANIDB_LETTERS = "SCTPO";
+		const ANIDB_LETTER_LIST = "S1 specials, C1 credits, T1 trailers, P1 parodies, O1 other";
 		const noneIn = (refs: Record<string, $ui.FieldRef<string>>, keys: string[]) => keys.some((k) => isNone(refs[k].current));
 		/** The TMDB ID field of an override into the override; throws on one that isn't an ID */
 		function readTmdbIdField(value: string, update: { tmdbId?: number; tmdbType?: "tv" | "movie" }) {
@@ -1753,20 +1764,21 @@ function init(): void {
 		}
 		/**
 		 * The Media tab's AniDB Episodes field: where episode 1 lands on AniDB, a main episode ("13"), a special ("S1") or
-		 * another episode ("O1"); "5=1" says which episode lands there instead (episode 5 is AniDB's 1: offset -4).
+		 * another lettered type ("O1", "C1", ...); "5=1" says which episode lands there instead (episode 5 is AniDB's 1:
+		 * offset -4).
 		 */
-		type AnidbEpisodes = { offset?: number; specials?: boolean; others?: boolean };
+		type AnidbEpisodes = { offset?: number; specials?: boolean; letter?: string };
 		function parseAnidbEpisodes(value: string): AnidbEpisodes | string {
-			const m = value.trim().match(/^(?:(-?\d+)\s*=\s*)?([SO]?)\s*(\d*)$/i);
-			if (!m || (!m[2] && !m[3]) || m[3] === "0")
-				return `"${value.trim()}" isn't an AniDB episode like 13, a special like S1 or another episode like O1.`;
-			const kind = m[2].toUpperCase();
+			const m = value.trim().match(/^(?:(-?\d+)\s*=\s*)?([A-Z]?)\s*(\d*)$/i);
+			const kind = m?.[2].toUpperCase() ?? "";
+			if (!m || (!m[2] && !m[3]) || m[3] === "0" || (kind && ANIDB_LETTERS.indexOf(kind) === -1))
+				return `"${value.trim()}" isn't an AniDB episode like 13, or a lettered one (${ANIDB_LETTER_LIST}).`;
 			const offset = Number(m[3] || 1) - (m[1] ? Number(m[1]) : 1);
-			return { ...(offset ? { offset } : {}), ...(kind === "S" ? { specials: true } : {}), ...(kind === "O" ? { others: true } : {}) };
+			return { ...(offset ? { offset } : {}), ...(kind === "S" ? { specials: true } : {}), ...(kind && kind !== "S" ? { letter: kind } : {}) };
 		}
 		/** The AniDB Episodes field's text (see parseAnidbEpisodes): empty for main episodes from 1 */
-		function formatAnidbEpisodes({ offset = 0, specials, others }: AnidbEpisodes) {
-			const kind = others ? "O" : specials ? "S" : "";
+		function formatAnidbEpisodes({ offset = 0, specials, letter }: AnidbEpisodes) {
+			const kind = letter ?? (specials ? "S" : "");
 			if (offset < 0) return `${1 - offset}=${kind}1`;
 			return offset || kind ? `${kind}${offset + 1}` : "";
 		}
@@ -1776,7 +1788,7 @@ function init(): void {
 		/** Whether a media override sets anything, "none" included (an override can be left with only episode overrides) */
 		const hasMediaOverride = (o: CEM.TMDBOverrides) =>
 			!!(o.tmdbId || o.tmdbSeason || o.tmdbOffset || o.tmdbNone) ||
-			!!(o.anidbId || o.anidbOffset || o.anidbSpecials || o.anidbOthers || o.anidbNone);
+			!!(o.anidbId || o.anidbOffset || o.anidbSpecials || o.anidbLetter || o.anidbNone);
 
 		/**
 		 * Override fields changed since they were saved (Auto-fill fills them without saving): a blue dot on that tab's Save.
@@ -1871,7 +1883,7 @@ function init(): void {
 				[
 					["13", "episode 1 is AniDB's episode 13 (empty: AniDB's episode 1)"],
 					["S1", "AniDB's specials, from S1"],
-					["O1", "AniDB's other episodes, from O1"],
+					["O1", "AniDB's other episodes, from O1; C1 credits, T1 trailers and P1 parodies the same way"],
 				],
 			],
 			[
@@ -2051,7 +2063,7 @@ function init(): void {
 			return pane("episode", [
 				tray.text(
 					"Applies to this episode only, over the media override and any range. Enter m<id> to make it a TMDB movie. " +
-						"AniDB Episode takes a number, a special like S3 or another like O5. Enter \"none\" to leave TMDB or AniDB out.",
+						"AniDB Episode takes a number or a lettered one (S3, C1, O5). Enter \"none\" to leave TMDB or AniDB out.",
 					{ className: "text-sm text-[--muted] break-normal text-pretty" },
 				),
 				styledInput("TMDB ID", { fieldRef: refs.tmdbId, disabled: !tmdb.API_KEY || isOff("episode.tmdbId"), placeholder: auto.epTmdbId }),
@@ -2261,7 +2273,7 @@ function init(): void {
 			const mediaFields = () => {
 				const o = tmdb.overrides.get(mediaId);
 				const tmdbPart = [o.tmdbId, o.tmdbType, o.tmdbSeason, o.tmdbSeasons, o.tmdbRanges, o.tmdbOffset];
-				return stableJson([...tmdbPart, o.anidbId, o.anidbOffset, o.anidbSpecials, o.anidbOthers, o.tmdbNone, o.anidbNone]);
+				return stableJson([...tmdbPart, o.anidbId, o.anidbOffset, o.anidbSpecials, o.anidbLetter, o.tmdbNone, o.anidbNone]);
 			};
 			const before = mediaFields();
 			try {
@@ -2701,8 +2713,8 @@ function init(): void {
 			const found = (text: string, steps: string[]): Status => ({ text, state: "found", title: "How the AniDB ID was found", steps });
 			const override = tmdb.overrides.get(mediaId).anidbId;
 			if (override) {
-				const { anidbOffset: offset, anidbSpecials: specials, anidbOthers: others } = tmdb.overrides.get(mediaId);
-				const where = formatAnidbEpisodes({ offset, specials, others });
+				const { anidbOffset: offset, anidbSpecials: specials, anidbLetter: letter } = tmdb.overrides.get(mediaId);
+				const where = formatAnidbEpisodes({ offset, specials, letter });
 				const from = where ? `, episodes ${where}` : "";
 				return found(`AniDB ID: ${override}, your override.`, [
 					`Your override in this tab sets AniDB ${override}${from}`,
@@ -4640,21 +4652,23 @@ function init(): void {
 				// Goja has no XML parser; AniDB's anime XML is regular enough for a few patterns
 				const main: CEM.AnidbAnime["main"] = [];
 				const specials: CEM.AnidbAnime["main"] = [];
-				const others: CEM.AnidbAnime["main"] = [];
+				const lettered: NonNullable<CEM.AnidbAnime["lettered"]> = {};
 				const episodeRe = /<episode\s+id="(\d+)"[^>]*>([\s\S]*?)<\/episode>/g;
 				let m: RegExpExecArray | null;
 				while ((m = episodeRe.exec(xml))) {
 					const epno = m[2].match(/<epno\s+type="(\d+)">\s*([^<]*?)\s*<\/epno>/);
-					// Type 1: main episodes ("12"); type 2: specials ("S1"); type 6: other episodes ("O1")
-					const special = epno?.[1] === "2" && /^S\d+$/.test(epno[2]);
-					const other = epno?.[1] === "6" && /^O\d+$/.test(epno[2]);
-					if (!epno || !((epno[1] === "1" && /^\d+$/.test(epno[2])) || special || other)) continue;
+					// Type 1: main episodes ("12"); the others by their letter: specials ("S1"), credits ("C1"), trailers
+					// ("T1"), parodies ("P1") and other episodes ("O1")
+					if (!epno) continue;
+					const isMain = epno[1] === "1" && /^\d+$/.test(epno[2]);
+					const letter = (epno[2].match(/^([A-Z])\d+$/) ?? [])[1];
+					if (!isMain && !letter) continue;
 					const airDate = (m[2].match(/<airdate>([^<]+)<\/airdate>/) ?? [])[1];
 					const length = Number((m[2].match(/<length>(\d+)<\/length>/) ?? [])[1]) || 0;
 					const title = anidbTitle(m[2]);
 					const summary = anidbSummary(m[2]);
-					(special ? specials : other ? others : main).push({
-						n: Number(epno[2].replace(/^[SO]/, "")),
+					(isMain ? main : letter === "S" ? specials : (lettered[letter!] ??= [])).push({
+						n: Number(epno[2].replace(/^[A-Z]/, "")),
 						eid: Number(m[1]),
 						...(airDate ? { airDate } : {}),
 						...(length ? { length } : {}),
@@ -4664,7 +4678,7 @@ function init(): void {
 				}
 				main.sort((a, b) => a.n - b.n);
 				specials.sort((a, b) => a.n - b.n);
-				others.sort((a, b) => a.n - b.n);
+				for (const list of Object.values(lettered)) list.sort((a, b) => a.n - b.n);
 				// Resource type 2 is MyAnimeList
 				const malIds: number[] = [];
 				const resourceRe = /<resource\s+type="2">([\s\S]*?)<\/resource>/g;
@@ -4681,7 +4695,7 @@ function init(): void {
 				const last = main.find((e) => episodeCount > 1 && e.n === episodeCount);
 				if (first && !first.airDate && entryDate("startdate")) first.airDate = entryDate("startdate");
 				if (last && !last.airDate && entryDate("enddate")) last.airDate = entryDate("enddate");
-				anime = { aid, episodeCount, main, specials, others, malIds };
+				anime = { aid, episodeCount, main, specials, lettered, malIds };
 			} else if (!/not found/i.test(xml)) {
 				log.warn(`AniDB ${aid}: unexpected answer from proxy.ani.zip`, xml.slice(0, 200));
 				return undefined; // an error like a ban or maintenance: don't remember it
@@ -4860,7 +4874,7 @@ function init(): void {
 			return { ok: true, offset, reason };
 		}
 
-		/** An AniDB entry's specials (S1 as 1), or other episodes (O1 as 1), in place of its main episodes, for the checks and lists below. */
+		/** An AniDB entry's specials (S1 as 1), or another lettered type (O1 as 1), in place of its main episodes, for the checks below. */
 		const asMain = (anime: CEM.AnidbAnime, episodes: CEM.AnidbEpisode[]): CEM.AnidbAnime => ({
 			aid: anime.aid, episodeCount: episodes.length, main: episodes, specials: [], malIds: [],
 		});
@@ -5145,19 +5159,19 @@ function init(): void {
 			}
 			if (override.anidbId) {
 				const offset = override.anidbOffset ?? 0;
-				const others = !!override.anidbOthers;
+				const letter = override.anidbLetter;
 				const same = existing?.status === "override" && existing.aid === override.anidbId && existing.offset === offset;
-				const sameKind = !!existing?.others === others && (!override.anidbSpecials || !!existing?.specials);
+				const sameKind = existing?.letter === letter && (!override.anidbSpecials || !!existing?.specials);
 				if (!force && same && sameKind && fresh(existing)) return existing;
 				const noEpisodes = { eids: {}, airDates: {} };
 				let anime = await anidbAnime(override.anidbId, force);
-				// An entry cached before the other episodes were kept: fetched again for them
-				if (others && anime && !anime.others) anime = await anidbAnime(override.anidbId, true);
+				// An entry cached before every lettered type was kept: fetched again for them
+				if (letter && anime && !anime.lettered) anime = await anidbAnime(override.anidbId, true);
 				// The entry's specials when you say so ("S1") or this anime's air dates fit them and not its main episodes (e.g.
-				// a mini anime listed as the parent's specials); its other episodes only when you say so ("O1")
-				let specials = !!override.anidbSpecials && !others;
+				// a mini anime listed as the parent's specials); its other lettered types only when you say so ("O1")
+				let specials = !!override.anidbSpecials && !letter;
 				let count: number | undefined;
-				if (others || specials) {
+				if (letter || specials) {
 					try {
 						count = Number((await ctx.anime.getAnimeEntry(mediaId)).media?.episodes) || undefined;
 					} catch {}
@@ -5171,8 +5185,8 @@ function init(): void {
 				}
 				const match: CEM.AnidbMatch = {
 					mediaId, status: "override", aid: override.anidbId, offset,
-					...(anime ? matchEpisodes(others ? asMain(anime, anime.others ?? []) : anime, offset, specials, count) : noEpisodes),
-					from: "your override", checkedAt: now, ...(specials ? { specials } : {}), ...(others ? { others } : {}),
+					...(anime ? matchEpisodes(letter ? asMain(anime, anime.lettered?.[letter] ?? []) : anime, offset, specials, count) : noEpisodes),
+					from: "your override", checkedAt: now, ...(specials ? { specials } : {}), ...(letter ? { letter } : {}),
 				};
 				saveAnidb(mediaId, match);
 				return match;

@@ -83,14 +83,15 @@ Custom metadata always wins over everything the plugin finds.
 The Overrides modal has three tabs.
 
 **Media tab.** Corrects the matches for the whole anime. Empty fields keep what the plugin found, which is shown
-greyed out in them.
+greyed out in them. Episodes entered with the ID field left empty use the ID shown there: `O1` alone in AniDB
+Episodes applies to the AniDB ID Seanime already has.
 
 | Field | Accepts |
 | --- | --- |
 | TMDB ID | `s1429` (a show), `m371371` (a movie), a TMDB link, or a plain number. TMDB's show and movie IDs overlap, so the prefix settles which one is meant. |
 | TMDB Episodes | Where the episodes are on TMDB. One season (`S2`), several seasons read as one run (`S1-S4, S6`), where episode 1 lands (`S6E2`: episode 1 is S6E2, episode 2 is S6E3, and so on), or episode ranges in TMDB's order (`S1E2-S1E4, S1E7`, `S1E6-S2` to the end of season 2, `S1E1-5`). Specials work the same way (`S0E66-S0E68, S0E70-S0E75`); season 0 comes first in TMDB's order. Seasons work without their `S` too (`2`, `1-4, 6`). |
 | AniDB ID | The AniDB anime ID to use. |
-| AniDB Episodes | Where episode 1 lands on AniDB: a main episode (`13`, for an AniList "part 2" that AniDB keeps in one entry), a special (`S1`) or an "other" episode (`O1`, for an entry like Girls und Panzer: Motto Love Love Sakusen Desu!, whose TV episodes AniDB lists as O1-O12 beside its four movies). Empty means main episode 1. |
+| AniDB Episodes | Where episode 1 lands on AniDB: a main episode (`13`, for an AniList "part 2" that AniDB keeps in one entry), or one of AniDB's lettered types: specials (`S1`), credits (`C1`), trailers (`T1`), parodies (`P1`) or other episodes (`O1`, for an entry like Girls und Panzer: Motto Love Love Sakusen Desu!, whose TV episodes AniDB lists as O1-O12 beside its four movies). Empty means main episode 1. |
 
 The Media tab's **What the fields take** link, at the end of its description, shows these examples in the plugin.
 
@@ -115,7 +116,7 @@ the media override and any range.
 
 - **TMDB ID, Season and Episode:** `m<id>` makes the episode a TMDB movie, for anime whose episodes are separate
   movies.
-- **AniDB ID and AniDB Episode:** the episode is a number, a special like `S3` or another episode like `O5`. Both are checked against AniDB when
+- **AniDB ID and AniDB Episode:** the episode is a number, or a lettered one like `S3`, `C1`, `T1`, `P1` or `O5`. Both are checked against AniDB when
   you save. The AniDB ID defaults to the anime's own.
 
 **`none`.** Type `none` in any TMDB or AniDB field, on either tab, to leave that source out. The source's other
@@ -533,8 +534,8 @@ searches, so a wrong one would do harm.
 
 **AniDB's data** comes from AniDB's HTTP API through `proxy.ani.zip`:
 
-- main episodes, specials and other episodes (`O1`, …, only used through an override), with air dates, lengths,
-  English titles and summaries;
+- main episodes, specials and AniDB's other lettered types (credits `C`, trailers `T`, parodies `P`, other `O`; only
+  used through an override), with air dates, lengths, English titles and summaries;
 - the MyAnimeList entries the AniDB entry links.
 
 It's cached for 14 days, with calls at least 1.5 seconds apart. When the first or last main episode has no date,

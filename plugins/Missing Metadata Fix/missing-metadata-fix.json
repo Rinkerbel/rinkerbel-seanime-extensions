@@ -1,7 +1,7 @@
 {
 	"id": "missing-metadata-fix",
 	"name": "Missing Metadata Fix",
-	"version": "2.2.0",
+	"version": "2.2.1",
 	"manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/missing-metadata-fix.json",
 	"language": "typescript",
 	"type": "plugin",

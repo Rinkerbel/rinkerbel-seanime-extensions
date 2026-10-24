@@ -254,8 +254,11 @@ declare namespace CEM {
 		anidbOffset?: number;
 		/** The offset counts in AniDB's specials (S1 onwards) instead of its main ones: entered as "S1" or "S3". */
 		anidbSpecials?: boolean;
-		/** The offset counts in AniDB's "other" episodes (O1 onwards) instead of its main ones: entered as "O1" or "O4". */
-		anidbOthers?: boolean;
+		/**
+		 * The offset counts in another of AniDB's lettered types instead of its main episodes: C credits, T trailers, P
+		 * parodies or O other episodes (entered as "O1", "C3"; S, specials, is anidbSpecials).
+		 */
+		anidbLetter?: string;
 		/** No tray badge or Overrides dot for this anime's missing TMDB match or AniDB ID. */
 		ignoreWarnings?: boolean;
 		/** "none" entered: no TMDB match for this anime, nothing looked up (episodes with their own TMDB ID still apply). */
@@ -371,8 +374,11 @@ declare namespace CEM {
 		main: AnidbEpisode[];
 		/** Specials (S1 as n 1). */
 		specials: AnidbEpisode[];
-		/** Other episodes (O1 as n 1, e.g. a TV cut of the entry's movies); missing in entries cached before they were kept. */
-		others?: AnidbEpisode[];
+		/**
+		 * The other lettered types by their letter (C credits, T trailers, P parodies, O other episodes, e.g. a TV cut of
+		 * the entry's movies), n without the letter; missing in entries cached before they were kept.
+		 */
+		lettered?: Record<string, AnidbEpisode[]>;
 		/** The MyAnimeList entries AniDB links (several for an entry MAL splits into parts). */
 		malIds: number[];
 	}
@@ -392,8 +398,8 @@ declare namespace CEM {
 		episodes?: Record<string, { title?: string; airDate?: string; length?: number; summary?: string }>;
 		/** The episodes are the AniDB entry's specials (a related anime has its main episodes), S1 onwards plus the offset. */
 		specials?: boolean;
-		/** The episodes are the AniDB entry's other episodes, O1 onwards plus the offset (only from your override). */
-		others?: boolean;
+		/** The episodes are one of the AniDB entry's lettered types (C, T, P, O), 1 onwards plus the offset (your override only). */
+		letter?: string;
 		from?: string;
 		reason?: string;
 		/** How many of TMDB's air dates it had; checked again once TMDB has more (they're tried on their own too). */
