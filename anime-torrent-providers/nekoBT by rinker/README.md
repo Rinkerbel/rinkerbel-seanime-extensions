@@ -19,7 +19,7 @@ A torrent provider for [Seanime](https://seanime.app) that searches [nekoBT](htt
 In Seanime, open the extensions page, choose to add an extension, and paste this manifest URL:
 
 ```txt
-https://raw.githubusercontent.com/Rinkerbel/rinkerbel-seanime-extensions/refs/heads/main/anime-torrent-providers/nekobt-rinkerbel/nekobt-rinkerbel.json
+https://raw.githubusercontent.com/Rinkerbel/rinkerbel-seanime-extensions/refs/heads/main/anime-torrent-providers/nekoBT%20by%20rinker/nekobt-rinkerbel.json
 ```
 
 After installing, open the extension's settings to configure it. Saving the settings once after an update clears any "user config is incompatible" warning.
