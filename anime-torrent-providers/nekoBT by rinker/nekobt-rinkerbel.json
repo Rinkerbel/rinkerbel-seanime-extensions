@@ -7,7 +7,7 @@
   "author": "bruuhim, rinkerbel",
   "type": "anime-torrent-provider",
   "icon": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/assets/nekobt.png",
-  "language": "javascript",
+  "language": "typescript",
   "website": "https://nekobt.to",
   "lang": "multi",
   "readme": "https://github.com/rinkerbel/rinkerbel-seanime-extensions/tree/main/anime-torrent-providers/nekobt-rinkerbel",
