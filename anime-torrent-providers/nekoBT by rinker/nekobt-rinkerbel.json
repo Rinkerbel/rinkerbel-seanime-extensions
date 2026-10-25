@@ -6,7 +6,7 @@
   "version": "1.6.10",
   "author": "bruuhim, rinkerbel",
   "type": "anime-torrent-provider",
-  "icon": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/assets/nekobt.png",
+  "icon": "https://github.com/Rinkerbel/rinkerbel-seanime-extensions/raw/refs/heads/main/anime-torrent-providers/nekoBT%20by%20rinker/icon.png",
   "language": "typescript",
   "website": "https://nekobt.to",
   "lang": "multi",
