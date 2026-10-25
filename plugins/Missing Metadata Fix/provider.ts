@@ -673,7 +673,7 @@ function init(): void {
 		 */
 		const tmdbOn = () => !!tmdb.API_KEY && (isOn("tmdb-thumbnails") || isOn("tmdb-fill-missing"));
 
-		// The stills and the fill-in are off unless switched on
+		// The stills and the fill-in default to on: without a token they do nothing
 		const isOn = (name: "tmdb-thumbnails" | "tmdb-fill-missing") => $getUserPreference(name) === "true";
 		/** On unless switched off (also when the setting doesn't exist yet). */
 		const anidbLookup = () => $getUserPreference("anidb-lookup") !== "false";
@@ -5650,11 +5650,14 @@ function init(): void {
 			}
 		}
 		log.step(`Settings: ${displaySettings}`);
-		/** Stills or fill-in switched on without a usable token: said in the log, and as an error each time the tray opens */
+		/**
+		 * Stills or fill-in on with a token that isn't usable: said in the log, and as an error each time the tray opens.
+		 * No token at all says nothing: both are on by default, and without one only AniDB is used.
+		 */
 		const tmdbProblem = () => {
 			const stills = isOn("tmdb-thumbnails");
 			const fill = isOn("tmdb-fill-missing");
-			if (!tmdbMissing || !(stills || fill)) return "";
+			if (!tmdbSetting || !tmdbMissing || !(stills || fill)) return "";
 			const what = stills && fill ? "stills and fill-in are" : stills ? "stills are" : "fill-in is";
 			return `TMDB ${what} on, but ${tmdbMissing}`;
 		};

@@ -33,8 +33,8 @@ Everything runs on its own once it's set up: open an anime, or keep watching you
 | --- | --- | --- |
 | TMDB API Read Access Token | empty | Needed for anything from TMDB. Take the **API Read Access Token** (the long one starting `eyJ`) from [TMDB's API settings](https://www.themoviedb.org/settings/api), not the shorter API key. The token is sent in a request header, so it never appears in URLs or logs. |
 | TMDB Image Sizes | 1280 px | The size of the TMDB stills. Changing it applies at once, nothing is fetched again. |
-| Replace episode thumbnails with TMDB stills | off | Shows TMDB's stills instead of Seanime's thumbnails. |
-| Fill in episode metadata from TMDB when Seanime has none | off | Fills in episodes that lack a title, summary, thumbnail or length, and adds aired episodes Seanime's list is missing. |
+| Replace episode thumbnails with TMDB stills (needs the token) | on | Shows TMDB's stills instead of Seanime's thumbnails. |
+| Fill in episode metadata from TMDB when Seanime has none (needs the token) | on | Fills in episodes that lack a title, summary, thumbnail or length, and adds aired episodes Seanime's list is missing. |
 | Look up missing AniDB IDs | on | Looks for an AniDB ID when Seanime's metadata has none. An ID is only used when AniDB's air dates prove it's the right one. |
 | Developer mode | off | Writes every step the plugin takes to Seanime's log file and adds a Debug button to Overrides. For reporting a problem: see below. |
 
@@ -42,7 +42,8 @@ The two TMDB switches turn on the automatic TMDB matching, and the AniDB switch 
 With a switch off, its stored matches stay on disk unused. The manual tools still work with the switches off: AniDB
 always, TMDB whenever a token is set.
 
-When a TMDB switch is on without a usable token, the tray shows an error each time it opens. A token is tried once
+Without a token the TMDB switches do nothing, so pasting one in is all TMDB needs. When a switch is on and the token
+isn't usable (an API key instead, or one TMDB rejects), the tray shows an error each time it opens. A token is tried once
 against TMDB when it's saved; if TMDB rejects it, TMDB stays off until a different token is saved.
 
 ## Using it

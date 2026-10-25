@@ -1,7 +1,7 @@
 {
 	"id": "missing-metadata-fix",
 	"name": "Missing Metadata Fix",
-	"version": "2.2.2",
+	"version": "2.2.3",
 	"manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Missing%20Metadata%20Fix/missing-metadata-fix.json",
 	"language": "typescript",
 	"type": "plugin",
@@ -36,7 +36,7 @@
 	},
 	"userConfig": {
 		"requiresConfig": true,
-		"version": 1,
+		"version": 2,
 		"fields": [
 			{
 				"name": "tmdb-api",
@@ -78,25 +78,25 @@
 			},
 			{
 				"name": "tmdb-thumbnails",
-				"label": "Replace episode thumbnails with TMDB stills",
+				"label": "Replace episode thumbnails with TMDB stills (needs the token)",
 				"type": "switch",
-				"default": "false"
+				"default": "true"
 			},
 			{
 				"name": "tmdb-fill-missing",
-				"label": "Fill in episode metadata from TMDB when Seanime has none",
+				"label": "Fill in episode metadata from TMDB when Seanime has none (needs the token)",
 				"type": "switch",
-				"default": "false"
+				"default": "true"
 			},
 			{
 				"name": "anidb-lookup",
-				"label": "Look up missing AniDB IDs (checked against AniDB's air dates)",
+				"label": "Look up missing AniDB IDs",
 				"type": "switch",
 				"default": "true"
 			},
 			{
 				"name": "debug-to-log",
-				"label": "Developer mode (writes every step to seanime.log and adds a Debug button to Overrides; turn it off afterwards)",
+				"label": "Developer mode (writes more to logs and adds a Debug button)",
 				"type": "switch",
 				"default": "false"
 			}
