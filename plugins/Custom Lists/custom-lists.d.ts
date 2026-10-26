@@ -11,6 +11,18 @@ declare namespace CL {
 	/** Runs AddHiddenEntries for one of the collection hooks, at most once per cached collection */
 	type MergeCollection = (type: MediaType, raw: boolean, fresh: boolean, collection: any) => void;
 
+	/**
+	 * After one of Seanime's own saves: notes that its next fetch of each collection is its own reload, and sets the
+	 * entry in the copy of the lists (what AniList now has, null when deleted, left out when the save kept them)
+	 */
+	type KeepLists = (mediaId: number | null, entry?: { lists: string[]; hidden: boolean } | null) => void;
+
+	/** The note keepLists leaves in $store (`ownFetch`): when, and which collections ("ANIME:raw") have reloaded since */
+	interface OwnFetch {
+		at: number;
+		seen: string[];
+	}
+
 	/** What the list section in Seanime's entry editor shows */
 	interface CardState {
 		/** loading: looking up the entry; ready: editable; missing: the entry wasn't found; error: AniList failed */
@@ -23,7 +35,7 @@ declare namespace CL {
 		hidden: boolean;
 	}
 
-	/** The plugin's copy of a type's lists from AniList (`lists:<type>` in $store), kept until Seanime's next fetch */
+	/** The plugin's copy of a type's lists from AniList (`lists:<type>` in $store), kept until Seanime next fetches from AniList */
 	interface Memberships {
 		/** Every custom list name, in AniList's order */
 		names: string[];

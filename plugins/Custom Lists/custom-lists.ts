@@ -8,13 +8,15 @@
  * Custom Lists. Contents, in file order:
  *
  * init()
- *   SHARED STORES    $shared modules: putting hidden entries back into the status lists, once per collection
+ *   SHARED STORES    $shared modules: putting hidden entries back into the status lists, once per collection, and
+ *                    keeping the copy of the lists through Seanime's own saves
  *   HOOKS            the eight collection hooks (anime and manga, fresh and cached, with and without custom lists),
- *                    and onPreUpdateEntry (the editor's Save, with its custom lists in the same request)
+ *                    onPreUpdateEntry (the editor's Save, with its custom lists in the same request), and Seanime's
+ *                    other saves
  *   UI CONTEXT       $ui.register, one runtime:
  *     1. Setup                    logging, the included lists setting
  *     2. AniList                  queries and mutations
- *     3. Seanime's collection     counts, finding an entry by title, refreshing Seanime
+ *     3. Seanime's collection     counts, finding an entry by title, changing the cache, refreshing Seanime
  *     4. Entry editor             the custom lists section in Seanime's list editor
  *     5. Tray                     creating, renaming and deleting lists, and which ones show in status lists
  *     6. Startup
@@ -122,8 +124,16 @@ function init(): void {
 			const key = `merged:${type}:${raw ? "raw" : "plain"}`;
 			if (fresh) {
 				$store.set(`merged:${type}:${raw ? "plain" : "raw"}`, false);
-				// Seanime fetched the collection from AniList: the editor's copy of the lists is fetched again when next used
-				$store.set(`listsStale:${type}`, true);
+				// Seanime fetched the collection from AniList: the editor's copy of the lists is fetched again when next
+				// used, unless this is the reload after one of Seanime's own saves (see keepLists), once per collection
+				const own = $store.get<CL.OwnFetch>("ownFetch");
+				const which = `${type}:${raw ? "raw" : "plain"}`;
+				// seen comes back from $store as a Go slice, which push wouldn't change: a new array is stored
+				const seen: string[] = [];
+				for (let i = 0; own && i < own.seen.length; i++) seen.push(String(own.seen[i]));
+				if (own && Date.now() - Number(own.at) < 30000 && seen.indexOf(which) < 0) {
+					$store.set("ownFetch", { at: own.at, seen: seen.concat([which]) });
+				} else $store.set(`listsStale:${type}`, true);
 			} else if ($store.get(key) === true) return;
 			$store.set(key, true);
 			try {
@@ -144,6 +154,32 @@ function init(): void {
 				console.error(
 					`[Custom Lists] Could not add hidden entries: ${err instanceof Error ? err.message : err}`,
 				);
+			}
+		};
+		return fn;
+	});
+
+	/**
+	 * Seanime reloads its collection from AniList after each of its own saves (the editor, a watched episode, a
+	 * rewatch, a delete), which would make the plugin fetch its copy of the lists again. None of those change an
+	 * entry's custom lists or hidden flag, so the save leaves a note that the next fetch of each collection is its own
+	 * reload, and changes the copy itself where the entry changed: `entry` is what AniList now has, null for a deleted
+	 * entry, and left out for a save that kept them (a new entry has none). The copy is per type and the hooks only get
+	 * the media ID, so both copies get it; IDs never clash between anime and manga.
+	 */
+	$shared.define("keepLists", () => {
+		const fn: CL.KeepLists = (mediaId, entry) => {
+			$store.set("ownFetch", { at: Date.now(), seen: [] });
+			if (!mediaId) return;
+			const types: CL.MediaType[] = ["ANIME", "MANGA"];
+			for (const type of types) {
+				const copy = $store.get<CL.Memberships>(`lists:${type}`);
+				if (!copy) continue;
+				if (entry === null) delete copy.entries[mediaId];
+				else if (entry) copy.entries[mediaId] = entry;
+				else if (!copy.entries[mediaId]) copy.entries[mediaId] = { lists: [], hidden: false };
+				else continue;
+				$store.set(`lists:${type}`, copy);
 			}
 		};
 		return fn;
@@ -228,12 +264,33 @@ function init(): void {
 			throw new Error(`Custom lists: ${err instanceof Error ? err.message : err}`);
 		}
 		$store.set(`pending:${mediaId}`, null);
-		// What AniList has now, for the editor if it stays open
+		// What AniList has now, for the editor if it stays open, and in the copy of the lists. Preventing the default
+		// skips onPostUpdateEntry, so the note for Seanime's reload is left here.
 		$store.set(`saved:${mediaId}`, { selected: pending.lists, hidden: pending.hidden });
+		$shared.use<CL.KeepLists>("keepLists")(mediaId, { lists: pending.lists, hidden: pending.hidden });
 		console.log(
 			`[Custom Lists] Saved ${mediaId} with its lists: ${pending.lists.length} lists, hidden: ${pending.hidden}`,
 		);
 		e.preventDefault();
+		e.next();
+	});
+
+	// Seanime's own saves, each followed by its reload of the collection: see keepLists. Their mediaId is a Go pointer,
+	// wrapped like the collection's optional fields.
+	$app.onPostUpdateEntry((e) => {
+		$shared.use<CL.KeepLists>("keepLists")(e.mediaId == null ? null : Number(String(e.mediaId)));
+		e.next();
+	});
+	$app.onPostUpdateEntryProgress((e) => {
+		$shared.use<CL.KeepLists>("keepLists")(e.mediaId == null ? null : Number(String(e.mediaId)));
+		e.next();
+	});
+	$app.onPostUpdateEntryRepeat((e) => {
+		$shared.use<CL.KeepLists>("keepLists")(e.mediaId == null ? null : Number(String(e.mediaId)));
+		e.next();
+	});
+	$app.onPostDeleteEntry((e) => {
+		$shared.use<CL.KeepLists>("keepLists")(e.mediaId == null ? null : Number(String(e.mediaId)), null);
 		e.next();
 	});
 
@@ -290,7 +347,8 @@ function init(): void {
 		/**
 		 * Every list name of a type, and each entry's lists and hidden flag. Seanime's own collection has neither, so they
 		 * come from AniList, in one request per type, and are kept until Seanime next fetches its collection (the Refresh
-		 * AniList button, its own refreshes, a save): its collection hooks mark the copy stale then.
+		 * AniList button, its own refreshes): its collection hooks mark the copy stale then. Seanime's reloads after its
+		 * own saves don't (see keepLists), and the plugin's writes change the copy themselves.
 		 */
 		function memberships(type: CL.MediaType): CL.Memberships {
 			const cached = $store.get<CL.Memberships>(`lists:${type}`);
@@ -332,6 +390,17 @@ function init(): void {
 				: { exists: false, lists: all.names, selected: [], hidden: false };
 		}
 
+		/**
+		 * Changes the copy of the lists after one of the plugin's own writes, so it stays right without being fetched
+		 * again. With no copy yet, the next use fetches one.
+		 */
+		function updateCopy(type: CL.MediaType, change: (copy: CL.Memberships) => void) {
+			const copy = $store.get<CL.Memberships>(`lists:${type}`);
+			if (!copy) return;
+			change(copy);
+			$store.set(`lists:${type}`, copy);
+		}
+
 		function saveListNames(type: CL.MediaType, names: string[]) {
 			const option = type === "ANIME" ? "animeListOptions" : "mangaListOptions";
 			anilist(`mutation ($lists: [String]) { UpdateUser(${option}: { customLists: $lists }) { id } }`, {
@@ -349,34 +418,24 @@ function init(): void {
 			);
 		}
 
-		/** Each entry in the list, with all the lists it's in */
-		function fetchMembers(type: CL.MediaType, name: string) {
-			const data = anilist(
-				`query ($userName: String, $type: MediaType) {
-					MediaListCollection(userName: $userName, type: $type) {
-						lists { name isCustomList entries { mediaId customLists(asArray: true) } }
-					}
-				}`,
-				{ userName: $database.anilist.getUsername(), type },
-			);
-			const group = (data?.MediaListCollection?.lists ?? []).find((l: any) => l?.isCustomList && l.name === name);
-			return ((group?.entries ?? []) as any[]).map((e) => ({
-				mediaId: Number(e.mediaId),
-				lists: enabledLists(e.customLists),
-			}));
-		}
-
 		/**
 		 * AniList has no rename: a list renamed in UpdateUser loses its entries. So the new list is added, the entries are
 		 * moved to it, and the old one is deleted.
 		 */
 		function renameList(type: CL.MediaType, oldName: string, newName: string) {
-			const names = fetchListNames(type);
+			// The names and every entry's lists, fresh in one request: what's moved must be what AniList has now
+			$store.set(`listsStale:${type}`, true);
+			const copy = memberships(type);
+			const names = copy.names;
 			if (names.indexOf(oldName) < 0) throw new Error(`"${oldName}" no longer exists`);
 			if (names.some((n) => n !== oldName && sameName(n, newName)))
 				throw new Error(`"${newName}" already exists`);
 			saveListNames(type, names.concat([newName]));
-			const members = fetchMembers(type, oldName);
+			const rename = (n: string) => (n === oldName ? newName : n);
+			const members = Object.keys(copy.entries)
+				.map(Number)
+				.filter((id) => copy.entries[id].lists.indexOf(oldName) >= 0)
+				.map((id) => ({ mediaId: id, lists: copy.entries[id].lists }));
 			// A few entries per request keeps each one small
 			for (let i = 0; i < members.length; i += 20) {
 				const batch = members.slice(i, i + 20);
@@ -387,15 +446,17 @@ function init(): void {
 					definitions.push(`$m${j}: Int, $l${j}: [String]`);
 					fields.push(`e${j}: SaveMediaListEntry(mediaId: $m${j}, customLists: $l${j}) { id }`);
 					variables[`m${j}`] = member.mediaId;
-					variables[`l${j}`] = member.lists.map((n) => (n === oldName ? newName : n));
+					variables[`l${j}`] = member.lists.map(rename);
 				});
 				anilist(`mutation (${definitions.join(", ")}) { ${fields.join(" ")} }`, variables);
 			}
 			deleteList(type, oldName);
-			saveListNames(
-				type,
-				names.map((n) => (n === oldName ? newName : n)),
-			);
+			saveListNames(type, names.map(rename));
+			updateCopy(type, (c) => {
+				c.names = c.names.map(rename);
+				for (const id of Object.keys(c.entries))
+					c.entries[Number(id)].lists = c.entries[Number(id)].lists.map(rename);
+			});
 			if (!isIncluded(type, oldName)) {
 				setIncluded(type, oldName, true);
 				setIncluded(type, newName, false);
@@ -407,6 +468,10 @@ function init(): void {
 		// ----------------------------------------------------------------------------------------------------------------
 		const rawCollection = (type: CL.MediaType): any =>
 			type === "ANIME" ? $anilist.getRawAnimeCollection(false) : $anilist.getRawMangaCollection(false);
+		const plainCollection = (type: CL.MediaType): any =>
+			type === "ANIME" ? $anilist.getAnimeCollection(false) : $anilist.getMangaCollection(false);
+		/** Seanime tells custom lists by their missing status */
+		const isCustom = (list: any) => text(list.isCustomList) === "true" || !text(list.status);
 
 		/** How many entries each custom list has, from Seanime's cached collection */
 		function listCounts(type: CL.MediaType): Record<string, number> {
@@ -414,8 +479,7 @@ function init(): void {
 			const lists = rawCollection(type)?.MediaListCollection?.lists ?? [];
 			for (let i = 0; i < lists.length; i++) {
 				const list = lists[i];
-				const custom = list && (text(list.isCustomList) === "true" || !text(list.status));
-				if (custom && text(list.name)) counts[text(list.name)] = list.entries?.length ?? 0;
+				if (list && isCustom(list) && text(list.name)) counts[text(list.name)] = list.entries?.length ?? 0;
 			}
 			return counts;
 		}
@@ -457,8 +521,8 @@ function init(): void {
 		}
 
 		/**
-		 * Fetches the collection from AniList again so the hooks rebuild it, then reloads the pages. Needed when AniList
-		 * changed, and to take entries out of the status lists: nothing removes an entry the hooks added.
+		 * Fetches the collection from AniList again so the hooks rebuild it, then reloads the pages. Only for when AniList
+		 * may have changed in ways the plugin can't follow in the cache: a tray change that failed partway.
 		 */
 		function refreshSeanime(type: CL.MediaType) {
 			try {
@@ -476,13 +540,63 @@ function init(): void {
 				const add = $shared.use<CL.AddHiddenEntries>("addHiddenEntries");
 				const excluded = ($storage.get<CL.Excluded>("excluded") ?? {})[type] ?? [];
 				const raw = rawCollection(type);
-				const plain =
-					type === "ANIME" ? $anilist.getAnimeCollection(false) : $anilist.getMangaCollection(false);
-				const added = add(plain, raw, excluded, type) + add(raw, raw, excluded, type);
+				const added = add(plainCollection(type), raw, excluded, type) + add(raw, raw, excluded, type);
 				if (added) reloadPages(type);
 			} catch (err) {
 				logError("Could not add hidden entries", err);
 			}
+		}
+
+		/**
+		 * Takes the hidden entries that no included list holds any more (a list turned off or deleted) out of Seanime's
+		 * cached collections now, with no request to AniList. AniList never puts a hidden entry in a status list, so every
+		 * hidden entry there was added by the hooks; the copy of the lists says which are hidden and where they are.
+		 */
+		function removeHiddenNow(type: CL.MediaType) {
+			try {
+				const copy = memberships(type);
+				const excluded = ($storage.get<CL.Excluded>("excluded") ?? {})[type] ?? [];
+				const drop = (id: number) => {
+					const entry = copy.entries[id];
+					return !!entry && entry.hidden && !entry.lists.some((name) => excluded.indexOf(name) < 0);
+				};
+				let removed = 0;
+				// The plain collection shares its status lists with the raw one, but isn't promised to
+				for (const collection of [rawCollection(type), plainCollection(type)]) {
+					const lists = collection?.MediaListCollection?.lists ?? [];
+					for (let i = 0; i < lists.length; i++) {
+						const list = lists[i];
+						if (!list || isCustom(list)) continue;
+						const entries = list.entries ?? [];
+						const kept: any[] = [];
+						for (let j = 0; j < entries.length; j++) {
+							if (drop(entries[j]?.media?.id)) removed++;
+							else kept.push(entries[j]);
+						}
+						if (kept.length !== entries.length) list.entries = kept;
+					}
+				}
+				if (removed) reloadPages(type);
+			} catch (err) {
+				logError("Could not take hidden entries out", err);
+			}
+		}
+
+		/** Renames a custom list in Seanime's cached collection, or takes it out (newName null) */
+		function renameInCollection(type: CL.MediaType, name: string, newName: string | null) {
+			const collection = rawCollection(type);
+			const lists = collection?.MediaListCollection?.lists ?? [];
+			const kept: any[] = [];
+			for (let i = 0; i < lists.length; i++) {
+				const list = lists[i];
+				if (list && isCustom(list) && text(list.name) === name) {
+					if (newName === null) continue;
+					list.name = newName;
+				}
+				kept.push(list);
+			}
+			if (kept.length !== lists.length) collection.MediaListCollection.lists = kept;
+			reloadPages(type);
 		}
 
 		// ----------------------------------------------------------------------------------------------------------------
@@ -785,7 +899,6 @@ function init(): void {
 		const dialog = ctx.state<{ kind: "" | "rename" | "delete"; name: string }>({ kind: "", name: "" });
 		const newName = ctx.fieldRef<string>("");
 		const renameTo = ctx.fieldRef<string>("");
-		let cancelRefresh: (() => void) | null = null;
 
 		function loadRows() {
 			const type = trayType.get();
@@ -809,7 +922,8 @@ function init(): void {
 
 		/**
 		 * Runs an AniList change with the tray showing it's busy. The AniList calls block the UI context, so the work
-		 * waits a moment for the tray to render first.
+		 * waits a moment for the tray to render first. The work changes Seanime's cache and the copy of the lists itself,
+		 * so Seanime needn't fetch its collection again; only a change that failed partway does.
 		 */
 		function runChange(description: string, work: () => string | void) {
 			if (trayStatus.get().busy) return;
@@ -819,9 +933,9 @@ function init(): void {
 				const type = trayType.get();
 				try {
 					const done = work();
-					refreshSeanime(type);
 					if (done) ctx.toast.success(done);
 				} catch (err) {
+					refreshSeanime(type);
 					logError(`Could not ${description}`, err);
 					ctx.toast.error(`Could not ${description}: ${errorText(err)}`);
 				}
@@ -840,7 +954,10 @@ function init(): void {
 				return;
 			}
 			runChange("create the list", () => {
-				saveListNames(type, fetchListNames(type).concat([name]));
+				// An empty list isn't in Seanime's collection: only the copy's names change
+				const names = fetchListNames(type).concat([name]);
+				saveListNames(type, names);
+				updateCopy(type, (c) => (c.names = names));
 				newName.setValue("");
 				return `Created "${name}"`;
 			});
@@ -882,6 +999,7 @@ function init(): void {
 									const type = trayType.get();
 									runChange("rename the list", () => {
 										renameList(type, row.name, to);
+										renameInCollection(type, row.name, to);
 										return `Renamed "${row.name}" to "${to}"`;
 									});
 								},
@@ -924,6 +1042,16 @@ function init(): void {
 									runChange("delete the list", () => {
 										deleteList(type, row.name);
 										setIncluded(type, row.name, true);
+										updateCopy(type, (c) => {
+											c.names = c.names.filter((n) => n !== row.name);
+											for (const id of Object.keys(c.entries)) {
+												const entry = c.entries[Number(id)];
+												entry.lists = entry.lists.filter((n) => n !== row.name);
+											}
+										});
+										renameInCollection(type, row.name, null);
+										// Hidden entries in no other included list go, as AniList now leaves them out
+										removeHiddenNow(type);
 										return `Deleted "${row.name}"`;
 									});
 								},
@@ -964,16 +1092,9 @@ function init(): void {
 							setIncluded(type, row.name, value);
 							rows.set(rows.get().map((r) => (r.name === row.name ? { ...r, included: value } : r)));
 							tray.update();
-							// Turning a list on changes Seanime's cache in place, with no request. Turning one off needs the
-							// collection fetched again (one request, shared by switches turned off in a row).
-							if (value && !cancelRefresh) addHiddenNow(type);
-							else {
-								cancelRefresh?.();
-								cancelRefresh = ctx.setTimeout(() => {
-									cancelRefresh = null;
-									refreshSeanime(type);
-								}, 1500);
-							}
+							// Both change Seanime's cache in place, with no request
+							if (value) addHiddenNow(type);
+							else removeHiddenNow(type);
 						}),
 					}),
 				],
