@@ -1,7 +1,7 @@
 {
 	"id": "custom-lists",
 	"name": "Custom Lists",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Custom%20Lists/custom-lists.json",
 	"language": "typescript",
 	"type": "plugin",

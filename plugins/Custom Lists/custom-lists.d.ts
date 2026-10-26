@@ -23,6 +23,14 @@ declare namespace CL {
 		hidden: boolean;
 	}
 
+	/** The plugin's copy of a type's lists from AniList (`lists:<type>` in $store), kept until Seanime's next fetch */
+	interface Memberships {
+		/** Every custom list name, in AniList's order */
+		names: string[];
+		/** Each entry in the user's list, by media ID: the lists it's in and whether it's hidden from status lists */
+		entries: Record<number, { lists: string[]; hidden: boolean }>;
+	}
+
 	/** A custom lists change in the open editor, waiting in $store (`pending:<media id>`) for the editor's Save */
 	interface Pending {
 		lists: string[];

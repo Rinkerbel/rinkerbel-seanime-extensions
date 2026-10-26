@@ -120,8 +120,11 @@ function init(): void {
 	$shared.define("mergeCollection", () => {
 		const fn: CL.MergeCollection = (type, raw, fresh, collection) => {
 			const key = `merged:${type}:${raw ? "raw" : "plain"}`;
-			if (fresh) $store.set(`merged:${type}:${raw ? "plain" : "raw"}`, false);
-			else if ($store.get(key) === true) return;
+			if (fresh) {
+				$store.set(`merged:${type}:${raw ? "plain" : "raw"}`, false);
+				// Seanime fetched the collection from AniList: the editor's copy of the lists is fetched again when next used
+				$store.set(`listsStale:${type}`, true);
+			} else if ($store.get(key) === true) return;
 			$store.set(key, true);
 			try {
 				const excluded = ($storage.get<CL.Excluded>("excluded") ?? {})[type] ?? [];
@@ -284,25 +287,49 @@ function init(): void {
 			return listNamesIn(anilist(`query { Viewer { ${LIST_OPTIONS} } }`, {}), type);
 		}
 
+		/**
+		 * Every list name of a type, and each entry's lists and hidden flag. Seanime's own collection has neither, so they
+		 * come from AniList, in one request per type, and are kept until Seanime next fetches its collection (the Refresh
+		 * AniList button, its own refreshes, a save): its collection hooks mark the copy stale then.
+		 */
+		function memberships(type: CL.MediaType): CL.Memberships {
+			const cached = $store.get<CL.Memberships>(`lists:${type}`);
+			if (cached && $store.get(`listsStale:${type}`) !== true) return cached;
+			// Before the request, so a refresh during it marks this copy stale again
+			$store.set(`listsStale:${type}`, false);
+			const data = anilist(
+				`query ($userName: String, $type: MediaType) {
+					Viewer { ${LIST_OPTIONS} }
+					MediaListCollection(userName: $userName, type: $type) {
+						lists { entries { mediaId hiddenFromStatusLists customLists(asArray: true) } }
+					}
+				}`,
+				{ userName: $database.anilist.getUsername(), type },
+			);
+			const fresh: CL.Memberships = { names: listNamesIn(data, type), entries: {} };
+			// customQuery's answer is Go-backed: index loops, as for Seanime's collections
+			const lists = data?.MediaListCollection?.lists ?? [];
+			for (let i = 0; i < lists.length; i++) {
+				const entries = lists[i]?.entries ?? [];
+				for (let j = 0; j < entries.length; j++) {
+					const entry = entries[j];
+					fresh.entries[entry.mediaId] = {
+						lists: enabledLists(entry.customLists),
+						hidden: !!entry.hiddenFromStatusLists,
+					};
+				}
+			}
+			$store.set(`lists:${type}`, fresh);
+			return fresh;
+		}
+
 		/** The entry's lists and hidden flag, with every list name of its type. exists is false when it isn't on the list. */
 		function fetchEntry(media: CL.CardMedia) {
-			const query = `query ($mediaId: Int, $userName: String) {
-				Viewer { ${LIST_OPTIONS} }
-				MediaList(mediaId: $mediaId, userName: $userName) { customLists(asArray: true) hiddenFromStatusLists }
-			}`;
-			try {
-				const data = anilist(query, { mediaId: media.id, userName: $database.anilist.getUsername() });
-				return {
-					exists: true,
-					lists: listNamesIn(data, media.type),
-					selected: enabledLists(data?.MediaList?.customLists),
-					hidden: !!data?.MediaList?.hiddenFromStatusLists,
-				};
-			} catch (err) {
-				// AniList answers a media that isn't on the list with "Not Found."
-				if (/not found/i.test(errorText(err))) return { exists: false, lists: [], selected: [], hidden: false };
-				throw err;
-			}
+			const all = memberships(media.type);
+			const entry = all.entries[media.id];
+			return entry
+				? { exists: true, lists: all.names, selected: entry.lists, hidden: entry.hidden }
+				: { exists: false, lists: all.names, selected: [], hidden: false };
 		}
 
 		function saveListNames(type: CL.MediaType, names: string[]) {
@@ -766,7 +793,7 @@ function init(): void {
 			try {
 				const counts = listCounts(type);
 				rows.set(
-					fetchListNames(type).map((name) => ({
+					memberships(type).names.map((name) => ({
 						name,
 						count: counts[name] ?? 0,
 						included: isIncluded(type, name),
