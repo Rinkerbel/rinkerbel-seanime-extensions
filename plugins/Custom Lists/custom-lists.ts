@@ -9,7 +9,8 @@
  *
  * init()
  *   SHARED STORES    $shared modules: putting hidden entries back into the status lists, once per collection
- *   HOOKS            the eight collection hooks (anime and manga, fresh and cached, with and without custom lists)
+ *   HOOKS            the eight collection hooks (anime and manga, fresh and cached, with and without custom lists),
+ *                    and onPreUpdateEntry (the editor's Save, with its custom lists in the same request)
  *   UI CONTEXT       $ui.register, one runtime:
  *     1. Setup                    logging, the included lists setting
  *     2. AniList                  queries and mutations
@@ -183,6 +184,56 @@ function init(): void {
 		e.next();
 	});
 
+	/**
+	 * A Save in Seanime's list editor. When its custom lists changed (the UI context leaves them in $store), they go
+	 * in the same request as Seanime's own fields, and Seanime's request is skipped: preventing the default counts as
+	 * success, and Seanime reloads the collection as usual. Every other save goes through untouched. If the request
+	 * fails, the throw fails the whole save, so nothing is half saved and the change stays for another try.
+	 */
+	$app.onPreUpdateEntry((e) => {
+		// Seanime's optional fields reach JavaScript as objects wrapping the value; String() gives it
+		const num = (v: unknown) => (v == null ? null : Number(String(v)));
+		const date = (d: any) => (d == null ? null : { year: num(d.year), month: num(d.month), day: num(d.day) });
+		const mediaId = num(e.mediaId);
+		const pending = mediaId ? $store.get<CL.Pending>(`pending:${mediaId}`) : null;
+		if (!pending) {
+			e.next();
+			return;
+		}
+		try {
+			const token = $database.anilist.getToken();
+			if (!token) throw new Error("log in to AniList first");
+			$anilist.customQuery(
+				{
+					query: `mutation ($mediaId: Int, $status: MediaListStatus, $scoreRaw: Int, $progress: Int, $startedAt: FuzzyDateInput, $completedAt: FuzzyDateInput, $lists: [String], $hidden: Boolean) {
+						SaveMediaListEntry(mediaId: $mediaId, status: $status, scoreRaw: $scoreRaw, progress: $progress, startedAt: $startedAt, completedAt: $completedAt, customLists: $lists, hiddenFromStatusLists: $hidden) { id }
+					}`,
+					variables: {
+						mediaId,
+						status: e.status == null ? null : String(e.status),
+						scoreRaw: num(e.scoreRaw),
+						progress: num(e.progress),
+						startedAt: date(e.startedAt),
+						completedAt: date(e.completedAt),
+						lists: pending.lists,
+						hidden: pending.hidden,
+					},
+				},
+				token,
+			);
+		} catch (err) {
+			throw new Error(`Custom lists: ${err instanceof Error ? err.message : err}`);
+		}
+		$store.set(`pending:${mediaId}`, null);
+		// What AniList has now, for the editor if it stays open
+		$store.set(`saved:${mediaId}`, { selected: pending.lists, hidden: pending.hidden });
+		console.log(
+			`[Custom Lists] Saved ${mediaId} with its lists: ${pending.lists.length} lists, hidden: ${pending.hidden}`,
+		);
+		e.preventDefault();
+		e.next();
+	});
+
 	// ====================================================================================================================
 	// UI CONTEXT
 	// ====================================================================================================================
@@ -252,15 +303,6 @@ function init(): void {
 				if (/not found/i.test(errorText(err))) return { exists: false, lists: [], selected: [], hidden: false };
 				throw err;
 			}
-		}
-
-		function saveEntry(mediaId: number, lists: string[], hidden: boolean) {
-			anilist(
-				`mutation ($mediaId: Int, $lists: [String], $hidden: Boolean) {
-					SaveMediaListEntry(mediaId: $mediaId, customLists: $lists, hiddenFromStatusLists: $hidden) { id }
-				}`,
-				{ mediaId, lists, hidden },
-			);
 		}
 
 		function saveListNames(type: CL.MediaType, names: string[]) {
@@ -434,7 +476,6 @@ function init(): void {
 			lists: [],
 			selected: [],
 			hidden: false,
-			save: "",
 		});
 		let cardMedia: CL.CardMedia | null = null;
 		/** What AniList has for the open entry, to tell whether Save has anything to send */
@@ -529,10 +570,7 @@ function init(): void {
 			// takes its content's natural width, so long list names arriving would otherwise widen it.
 			root.setAttribute("class", "UI-BasicField__field relative w-0 min-w-full space-y-1");
 			root.setInnerHTML(
-				'<div class="flex items-center justify-between gap-2">' +
-					'<label class="UI-BasicField__fieldLabel text-sm w-fit font-semibold self-start">Custom lists</label>' +
-					'<span data-cl-note class="UI-BasicField__fieldHelpText text-[0.83rem] text-[--muted] break-words"></span>' +
-					"</div>" +
+				'<label class="UI-BasicField__fieldLabel text-sm w-fit font-semibold self-start">Custom lists</label>' +
 					// Seanime's input box. A fixed height: the lists scroll inside it instead of the editor growing
 					'<div data-cl-box class="UI-Input__root block w-full h-40 overflow-y-auto px-3 py-1 rounded-xl bg-gray-950 border border-[--border] shadow-sm"></div>' +
 					checkboxRow("data-cl-hidden", "Hide from status lists", "pt-1"),
@@ -541,14 +579,10 @@ function init(): void {
 			const saveRow = await form.queryOne(`.space-y-3 > div:has(button[type="submit"])`);
 			if (saveRow) saveRow.before(root);
 			else form.append(root);
-			const [note, box, hide] = await Promise.all([
-				root.queryOne("[data-cl-note]"),
-				root.queryOne("[data-cl-box]"),
-				root.queryOne("[data-cl-hidden]"),
-			]);
+			const [box, hide] = await Promise.all([root.queryOne("[data-cl-box]"), root.queryOne("[data-cl-hidden]")]);
 			const hideBox = await hide!.queryOne("button");
 			stopListening.push(hide!.addEventListener("click", () => toggleHidden()));
-			return { root, note: note!, box: box!, hideBox: hideBox!, listBoxes: [], drawn: {} };
+			return { root, box: box!, hideBox: hideBox!, listBoxes: [], drawn: {} };
 		}
 
 		/** Fills the list box: the lists, or a message. Rows are only rebuilt here, so ticking keeps the scroll position. */
@@ -584,18 +618,16 @@ function init(): void {
 			drawCard();
 		}
 
-		/** Shows the state on the section's checkboxes and note. Each goes through the DOM bridge, so only changes are sent. */
+		/** Shows the state on the section's checkboxes. Each goes through the DOM bridge, so only changes are sent. */
 		function drawCard() {
 			const s = section;
 			if (!s) return;
-			const { status, lists, selected, hidden, save } = cardState.get();
+			const { status, lists, selected, hidden } = cardState.get();
 			const draw = (key: string, value: string, apply: () => void) => {
 				if (s.drawn[key] === value) return;
 				s.drawn[key] = value;
 				apply();
 			};
-			const note = { "": "", unsaved: "Saves with Save", saving: "Saving...", saved: "Saved" }[save];
-			draw("note", note, () => s.note.setText(note));
 			s.listBoxes.forEach((box, i) => {
 				const checked = selected.indexOf(lists[i]) >= 0;
 				draw(`list${i}`, String(checked), () => setCheckbox(box, checked));
@@ -605,12 +637,20 @@ function init(): void {
 			draw("hidden", `${hiddenOn} ${off}`, () => setCheckbox(s.hideBox, hiddenOn, off));
 		}
 
+		/**
+		 * A change in the section. It's left in $store for onPreUpdateEntry, which sends it with Seanime's request when
+		 * the editor's Save is pressed. Back to what AniList has, nothing is left.
+		 */
 		function change(selected: string[], hidden: boolean) {
-			if (!cardMedia || !saved || cardState.get().status !== "ready") return;
+			const media = cardMedia;
+			if (!media || !saved || cardState.get().status !== "ready") return;
 			// An entry hidden from the status lists and in no custom list would be nowhere on AniList
 			hidden = hidden && selected.length > 0;
-			const unchanged = sameLists(selected, saved.selected) && hidden === saved.hidden;
-			setCard({ selected, hidden, save: unchanged ? "" : "unsaved" });
+			setCard({ selected, hidden });
+			// A Save while the editor stayed open changed what AniList has
+			const current = $store.get<{ selected: string[]; hidden: boolean }>(`saved:${media.id}`) ?? saved;
+			const unchanged = sameLists(selected, current.selected) && hidden === current.hidden;
+			$store.set(`pending:${media.id}`, unchanged ? null : { lists: selected, hidden, opening });
 		}
 		function toggleList(i: number) {
 			const { lists, selected, hidden } = cardState.get();
@@ -631,7 +671,7 @@ function init(): void {
 		async function openCard() {
 			const run = ++opening;
 			closeCard(false);
-			cardState.set({ status: "loading", message: "", lists: [], selected: [], hidden: false, save: "" });
+			cardState.set({ status: "loading", message: "", lists: [], selected: [], hidden: false });
 			try {
 				const form = await ctx.dom.queryOne(FORM);
 				if (run !== opening || !form) return;
@@ -639,16 +679,6 @@ function init(): void {
 				if (run !== opening) return;
 				section = mounted;
 				await fillLists();
-				// The form's submit event: Seanime's Save button, or Enter in one of its fields
-				stopListening.push(
-					form.addEventListener("submit", () => {
-						try {
-							saveCard();
-						} catch (err) {
-							logError("Could not save the entry's lists", err);
-						}
-					}),
-				);
 
 				const media = await findCardMedia();
 				if (run !== opening) return;
@@ -666,6 +696,8 @@ function init(): void {
 				}
 				cardMedia = media;
 				saved = { selected: entry.selected, hidden: entry.hidden };
+				$store.set(`pending:${media.id}`, null);
+				$store.set(`saved:${media.id}`, null);
 				setCard({ status: "ready", lists: entry.lists, selected: entry.selected, hidden: entry.hidden });
 				await fillLists();
 			} catch (err) {
@@ -677,33 +709,21 @@ function init(): void {
 			}
 		}
 
-		/** Saves with the editor's own Save button, in one request, like the editor's other fields */
-		function saveCard() {
-			if (!cardMedia || !saved) return;
-			const { selected, hidden } = cardState.get();
-			if (sameLists(selected, saved.selected) && hidden === saved.hidden) return;
-			const media = cardMedia;
-			setCard({ save: "saving" });
-			try {
-				saveEntry(media.id, selected, hidden);
-				saved = { selected, hidden };
-				setCard({ save: "saved" });
-				log(`Saved ${media.type.toLowerCase()} ${media.id}: ${selected.length} lists, hidden: ${hidden}`);
-			} catch (err) {
-				logError("Could not save the entry's lists", err);
-				setCard({ save: "unsaved" });
-				ctx.toast.error(`Custom lists not saved: ${errorText(err)}`);
-				return;
-			}
-			// Seanime refreshes its collection after its own save too, but that can run before this one lands
-			refreshSeanime(media.type);
-		}
-
 		/**
-		 * Closing the editor without Save drops the changes, as for its other fields. Seanime removes the section with
-		 * the editor; `remove` takes it out when a new editor opens over an old one.
+		 * Closing the editor without Save drops the changes, as for its other fields. A Save just before closing may
+		 * still be on its way to onPreUpdateEntry, so the change is dropped a few seconds later, unless the editor opened
+		 * again. Seanime removes the section with the editor; `remove` takes it out when a new editor opens over an old
+		 * one.
 		 */
 		function closeCard(closed = true) {
+			const media = cardMedia;
+			const run = opening;
+			if (media) {
+				ctx.setTimeout(() => {
+					const pending = $store.get<CL.Pending>(`pending:${media.id}`);
+					if (pending && pending.opening === run) $store.set(`pending:${media.id}`, null);
+				}, 5000);
+			}
 			if (closed) opening++;
 			cardMedia = null;
 			saved = null;

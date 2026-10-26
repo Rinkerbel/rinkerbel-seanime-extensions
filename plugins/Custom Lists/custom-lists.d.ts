@@ -21,19 +21,24 @@ declare namespace CL {
 		/** The lists the entry is in */
 		selected: string[];
 		hidden: boolean;
-		/** "": nothing to save; unsaved: changed, waiting for the editor's Save; saving; saved */
-		save: "" | "unsaved" | "saving" | "saved";
+	}
+
+	/** A custom lists change in the open editor, waiting in $store (`pending:<media id>`) for the editor's Save */
+	interface Pending {
+		lists: string[];
+		hidden: boolean;
+		/** Which opening of the editor made it, so closing that editor can drop it */
+		opening: number;
 	}
 
 	/** The section's elements in the open editor */
 	interface Section {
 		root: $ui.DOMElement;
-		note: $ui.DOMElement;
 		/** The list box, and the checkbox of each list in it */
 		box: $ui.DOMElement;
 		listBoxes: $ui.DOMElement[];
 		hideBox: $ui.DOMElement;
-		/** What each checkbox and the note show, so only changes go through the DOM bridge */
+		/** What each checkbox shows, so only changes go through the DOM bridge */
 		drawn: Record<string, string>;
 	}
 
