@@ -11,6 +11,14 @@ A Seanime plugin for your AniList custom lists, for anime and manga:
 
 ## Using it
 
+### Setup
+
+In Seanime, open **Extensions**, add an extension by URL, and paste the manifest URL:
+
+```
+https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Custom%20Lists/custom-lists.json
+```
+
 ### A title's lists
 
 Open the list editor for a title in your list (the edit button on its card or on its page). Tick the custom lists it
@@ -36,11 +44,11 @@ Open the **Custom Lists** tray and pick **Anime** or **Manga**.
 
 ## Permissions
 
-| Scope | Why |
-|---|---|
+| Scope                      | Why                                                            |
+| -------------------------- | -------------------------------------------------------------- |
 | `anilist`, `anilist-token` | Reads your custom lists from AniList and saves changes to them |
-| `database` | Reads your AniList username and login |
-| `storage` | Remembers which lists are left out of the status lists |
+| `database`                 | Reads your AniList username and login                          |
+| `storage`                  | Remembers which lists are left out of the status lists         |
 
 ## Credits
 
