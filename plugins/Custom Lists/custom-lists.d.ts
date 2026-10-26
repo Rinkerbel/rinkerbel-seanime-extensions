@@ -51,13 +51,18 @@ declare namespace CL {
 		opening: number;
 	}
 
+	/** An element reached by its ID (ctx.dom.asElement), with no round trip to the page */
+	type Handle = Omit<$ui.DOMElement, "tagName" | "attributes" | "innerHTML">;
+
 	/** The section's elements in the open editor */
 	interface Section {
+		/** The prefix of the IDs in the section's markup */
+		id: string;
 		root: $ui.DOMElement;
 		/** The list box, and the checkbox of each list in it */
-		box: $ui.DOMElement;
-		listBoxes: $ui.DOMElement[];
-		hideBox: $ui.DOMElement;
+		box: Handle;
+		listBoxes: Handle[];
+		hideBox: Handle;
 		/** What each checkbox shows, so only changes go through the DOM bridge */
 		drawn: Record<string, string>;
 	}

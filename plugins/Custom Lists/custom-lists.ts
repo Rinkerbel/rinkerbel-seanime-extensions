@@ -381,6 +381,10 @@ function init(): void {
 			return fresh;
 		}
 
+		/** Whether the copy of a type's lists is there and current, so reading it costs no request */
+		const hasFreshCopy = (type: CL.MediaType) =>
+			!!$store.get(`lists:${type}`) && $store.get(`listsStale:${type}`) !== true;
+
 		/** The entry's lists and hidden flag, with every list name of its type. exists is false when it isn't on the list. */
 		function fetchEntry(media: CL.CardMedia) {
 			const all = memberships(media.type);
@@ -634,21 +638,28 @@ function init(): void {
 			drawCard();
 		};
 
-		async function readEditor(): Promise<{ title: string; type: CL.MediaType | null }> {
-			// The editor is a modal on media cards and small screens, and a popover on the entry page
-			const titleEl =
-				(await ctx.dom.queryOne(`[role="dialog"]:has(${FORM}) .UI-Modal__title`)) ??
-				(await ctx.dom.queryOne(`.UI-Popover__root:has(${FORM}) > p`));
-			const title = titleEl ? (await titleEl.getText()).trim() : "";
-			// The repeat field's label; unreleased media have none
-			const text = (await (await ctx.dom.queryOne(FORM))?.getText()) ?? "";
-			const type = /rereads/i.test(text) ? "MANGA" : /rewatches/i.test(text) ? "ANIME" : null;
-			return { title, type };
-		}
+		/** An element's text from its innerHTML (queries can return innerHTML in the same round trip, not text) */
+		const htmlText = (html: string | undefined) =>
+			(html ?? "")
+				.replace(/<[^>]*>/g, "")
+				.replace(/&nbsp;/g, " ")
+				.replace(/&lt;/g, "<")
+				.replace(/&gt;/g, ">")
+				.replace(/&quot;/g, '"')
+				.replace(/&#39;/g, "'")
+				.replace(/&amp;/g, "&")
+				.trim();
 
-		/** The media the editor is open for */
-		async function findCardMedia(): Promise<CL.CardMedia | null> {
-			const { title, type } = await readEditor();
+		/**
+		 * The media the editor is open for, from its title and the form's text (whether its repeat field says
+		 * "rewatches" or "rereads"; unreleased media have none)
+		 */
+		function findCardMedia(title: string, formHtml: string): CL.CardMedia | null {
+			const type: CL.MediaType | null = /rereads/i.test(formHtml)
+				? "MANGA"
+				: /rewatches/i.test(formHtml)
+					? "ANIME"
+					: null;
 			const pageType: CL.MediaType | null =
 				page.pathname === "/entry" ? "ANIME" : page.pathname === "/manga/entry" ? "MANGA" : null;
 			const pageId = pageType ? parseInt(page.searchParams.id ?? "", 10) : NaN;
@@ -681,16 +692,38 @@ function init(): void {
 			'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" stroke="currentColor" fill="currentColor" class="UI-Checkbox__checkIcon absolute h-4 w-4">' +
 			'<path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>' +
 			"</svg></span>";
+		// Seanime's Skeleton (components/ui/skeleton), in rows as tall as a checkbox row (its 24px text line and py-1.5), so
+		// the lists replace it without anything moving
+		const SKELETON_PART = "UI-Skeleton__root animate-pulse rounded-[--radius-md] bg-[--subtle]";
+		const SKELETON = ["w-32", "w-24", "w-40", "w-28"]
+			.map(
+				(width) =>
+					`<div data-cl-skeleton class="flex items-center gap-2 w-full h-9"><div class="${SKELETON_PART} h-5 w-5 shrink-0"></div><div class="${SKELETON_PART} h-4 ${width}"></div></div>`,
+			)
+			.join("");
 		const escapeHtml = (s: string) =>
 			s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-		/** One checkbox row; the row is what's clicked, so its label toggles it too */
-		const checkboxRow = (attr: string, label: string, className: string) =>
-			`<div ${attr} class="UI-Checkbox__container inline-flex gap-2 items-center cursor-pointer select-none ${className}">` +
-			`<button type="button" role="checkbox" aria-checked="false" data-state="unchecked" class="${CHECKBOX_ROOT}"></button>` +
+
+		/**
+		 * One checkbox row, drawn as it should show. The row (`id`) is what's clicked, so its label toggles it too; its
+		 * checkbox is `<id>-box`. The plugin sets the IDs itself so it can reach the elements with ctx.dom.asElement,
+		 * without a query's round trip to the page.
+		 */
+		const checkboxRow = (
+			id: string,
+			attr: string,
+			label: string,
+			className: string,
+			checked: boolean,
+			disabled = false,
+		) =>
+			`<div id="${id}" ${attr} class="UI-Checkbox__container inline-flex gap-2 items-center cursor-pointer select-none ${className}">` +
+			`<button id="${id}-box" type="button" role="checkbox" aria-checked="${checked}" data-state="${checked ? "checked" : "unchecked"}"` +
+			`${disabled ? ' disabled="" data-disabled="true"' : ""} class="${CHECKBOX_ROOT}">${checked ? CHECK_ICON : ""}</button>` +
 			`<label class="UI-Checkbox_label font-normal cursor-pointer min-w-0 break-words">${escapeHtml(label)}</label></div>`;
 
 		/** Ticks or unticks one of the section's checkboxes, as Radix does Seanime's */
-		function setCheckbox(box: $ui.DOMElement, checked: boolean, disabled = false) {
+		function setCheckbox(box: CL.Handle, checked: boolean, disabled = false) {
 			box.setAttribute("data-state", checked ? "checked" : "unchecked");
 			box.setAttribute("aria-checked", String(checked));
 			box.setInnerHTML(checked ? CHECK_ICON : "");
@@ -703,59 +736,75 @@ function init(): void {
 			}
 		}
 
-		/** Adds the section to the open editor, above its Save row, with nothing in its list yet */
-		async function mountSection(form: $ui.DOMElement): Promise<CL.Section> {
-			const root = await ctx.dom.createElement("div");
-			root.setAttribute("data-custom-lists-section", "");
-			// w-0 min-w-full: no width of its own, the form's width. On the entry page the editor is a popover that
-			// takes its content's natural width, so long list names arriving would otherwise widen it.
-			root.setAttribute("class", "UI-BasicField__field relative w-0 min-w-full space-y-1");
-			root.setInnerHTML(
-				'<label class="UI-BasicField__fieldLabel text-sm w-fit font-semibold self-start">Custom lists</label>' +
-					// Seanime's input box. A fixed height: the lists scroll inside it instead of the editor growing
-					'<div data-cl-box class="UI-Input__root block w-full h-40 overflow-y-auto px-3 py-1 rounded-xl bg-gray-950 border border-[--border] shadow-sm"></div>' +
-					checkboxRow("data-cl-hidden", "Hide from status lists", "pt-1"),
-			);
-			// The form's rows sit in a stack; the Save row is the one with the submit button
-			const saveRow = await form.queryOne(`.space-y-3 > div:has(button[type="submit"])`);
-			if (saveRow) saveRow.before(root);
-			else form.append(root);
-			const [box, hide] = await Promise.all([root.queryOne("[data-cl-box]"), root.queryOne("[data-cl-hidden]")]);
-			const hideBox = await hide!.queryOne("button");
-			stopListening.push(hide!.addEventListener("click", () => toggleHidden()));
-			return { root, box: box!, hideBox: hideBox!, listBoxes: [], drawn: {} };
+		/** How the hide checkbox shows: it needs a ready entry with a list ticked */
+		function hideState() {
+			const { status, selected, hidden } = cardState.get();
+			const disabled = status !== "ready" || !selected.length;
+			return { checked: hidden && !disabled, disabled };
 		}
 
-		/** Fills the list box: the lists, or a message. Rows are only rebuilt here, so ticking keeps the scroll position. */
-		async function fillLists() {
+		/** The list box's content: skeleton rows while loading, a message, or a checkbox per list */
+		function boxHtml(id: string): string {
+			const { status, message, lists, selected } = cardState.get();
+			if (status === "loading") return SKELETON;
+			if (status !== "ready" || !lists.length) {
+				const text = status === "ready" ? "No custom lists yet. Create one in the Custom Lists tray." : message;
+				return `<div class="h-full flex items-center justify-center text-center text-sm text-[--muted]">${escapeHtml(text)}</div>`;
+			}
+			return lists
+				.map((name, i) =>
+					checkboxRow(
+						`${id}-list-${i}`,
+						`data-cl-list="${i}"`,
+						name,
+						"w-full py-1.5",
+						selected.indexOf(name) >= 0,
+					),
+				)
+				.join("");
+		}
+
+		/**
+		 * The whole section as it should show now, for one setInnerHTML. Built in full before it's added, so the
+		 * editor gets it in one go: no message or empty box first.
+		 */
+		function sectionHtml(id: string): string {
+			const hide = hideState();
+			return (
+				'<label class="UI-BasicField__fieldLabel text-sm w-fit font-semibold self-start">Custom lists</label>' +
+				// Seanime's input box. A fixed height: the lists scroll inside it instead of the editor growing
+				`<div id="${id}-box" data-cl-box class="UI-Input__root block w-full h-40 overflow-y-auto px-3 py-1 rounded-xl bg-gray-950 border border-[--border] shadow-sm">${boxHtml(id)}</div>` +
+				checkboxRow(
+					`${id}-hide`,
+					"data-cl-hidden",
+					"Hide from status lists",
+					"pt-1",
+					hide.checked,
+					hide.disabled,
+				)
+			);
+		}
+
+		/** Listens to the list rows just drawn, and records what their checkboxes show */
+		function wireLists(s: CL.Section) {
+			const { status, lists, selected } = cardState.get();
+			s.listBoxes = [];
+			s.drawn = { hidden: s.drawn.hidden };
+			if (status !== "ready") return;
+			lists.forEach((name, i) => {
+				const row = ctx.dom.asElement(`${s.id}-list-${i}`);
+				stopListening.push(row.addEventListener("click", () => toggleList(i)));
+				s.listBoxes.push(ctx.dom.asElement(`${s.id}-list-${i}-box`));
+				s.drawn[`list${i}`] = String(selected.indexOf(name) >= 0);
+			});
+		}
+
+		/** Draws the list box again (after the lists load). Rows are only rebuilt here, so ticking keeps the scroll position. */
+		function fillLists() {
 			const s = section;
 			if (!s) return;
-			const { status, message, lists } = cardState.get();
-			s.listBoxes = [];
-			s.drawn = {};
-			if (status !== "ready" || !lists.length) {
-				const text =
-					status === "loading"
-						? "Loading..."
-						: status === "ready"
-							? "No custom lists yet. Create one in the Custom Lists tray."
-							: message;
-				s.box.setInnerHTML(
-					`<div class="h-full flex items-center justify-center text-center text-sm text-[--muted]">${escapeHtml(text)}</div>`,
-				);
-				drawCard();
-				return;
-			}
-			s.box.setInnerHTML(
-				lists.map((name, i) => checkboxRow(`data-cl-list="${i}"`, name, "w-full py-1.5")).join(""),
-			);
-			const rows = await s.box.query("[data-cl-list]");
-			if (section !== s) return;
-			for (const row of rows) {
-				const i = parseInt(row.attributes["data-cl-list"] ?? "", 10);
-				stopListening.push(row.addEventListener("click", () => toggleList(i)));
-			}
-			s.listBoxes = await Promise.all(rows.map((row) => row.queryOne("button") as Promise<$ui.DOMElement>));
+			s.box.setInnerHTML(boxHtml(s.id));
+			wireLists(s);
 			drawCard();
 		}
 
@@ -763,7 +812,7 @@ function init(): void {
 		function drawCard() {
 			const s = section;
 			if (!s) return;
-			const { status, lists, selected, hidden } = cardState.get();
+			const { lists, selected } = cardState.get();
 			const draw = (key: string, value: string, apply: () => void) => {
 				if (s.drawn[key] === value) return;
 				s.drawn[key] = value;
@@ -773,9 +822,10 @@ function init(): void {
 				const checked = selected.indexOf(lists[i]) >= 0;
 				draw(`list${i}`, String(checked), () => setCheckbox(box, checked));
 			});
-			const off = status !== "ready" || !selected.length;
-			const hiddenOn = hidden && !off;
-			draw("hidden", `${hiddenOn} ${off}`, () => setCheckbox(s.hideBox, hiddenOn, off));
+			const hide = hideState();
+			draw("hidden", `${hide.checked} ${hide.disabled}`, () =>
+				setCheckbox(s.hideBox, hide.checked, hide.disabled),
+			);
 		}
 
 		/**
@@ -809,43 +859,100 @@ function init(): void {
 			change(selected, !hidden);
 		}
 
+		/** Looks the entry up in the copy of the lists and shows it (fetching the copy first when it's stale) */
+		function loadEntry(media: CL.CardMedia) {
+			const entry = fetchEntry(media);
+			if (!entry.exists) {
+				cardState.set({ ...cardState.get(), status: "missing", message: "Save the entry first." });
+				return;
+			}
+			cardMedia = media;
+			saved = { selected: entry.selected, hidden: entry.hidden };
+			$store.set(`pending:${media.id}`, null);
+			$store.set(`saved:${media.id}`, null);
+			cardState.set({
+				status: "ready",
+				message: "",
+				lists: entry.lists,
+				selected: entry.selected,
+				hidden: entry.hidden,
+			});
+		}
+
+		/**
+		 * Every bridge call is a round trip to the page, and the editor is already open, so the section is added as
+		 * soon as it can be: one round of queries in parallel (the form with its text, its Save row, the title, a new
+		 * element), then the section built in full and added in one go. With the copy of the lists at hand (the usual
+		 * case) it's added with the entry's lists; otherwise with skeleton rows of the same height, then the lists are
+		 * fetched.
+		 */
 		async function openCard() {
 			const run = ++opening;
 			closeCard(false);
 			cardState.set({ status: "loading", message: "", lists: [], selected: [], hidden: false });
 			try {
-				const form = await ctx.dom.queryOne(FORM);
-				if (run !== opening || !form) return;
-				const mounted = await mountSection(form);
-				if (run !== opening) return;
-				section = mounted;
-				await fillLists();
+				const [form, saveRow, modalTitle, popoverTitle, root] = await Promise.all([
+					ctx.dom.queryOne(FORM, { withInnerHTML: true }),
+					// The form's rows sit in a stack; the Save row is the one with the submit button
+					ctx.dom.queryOne(`${FORM} .space-y-3 > div:has(button[type="submit"])`),
+					// The editor is a modal on media cards and small screens, and a popover on the entry page
+					ctx.dom.queryOne(`[role="dialog"]:has(${FORM}) .UI-Modal__title`, { withInnerHTML: true }),
+					ctx.dom.queryOne(`.UI-Popover__root:has(${FORM}) > p`, { withInnerHTML: true }),
+					ctx.dom.createElement("div"),
+				]);
+				if (run !== opening || !form) {
+					root.remove();
+					return;
+				}
 
-				const media = await findCardMedia();
-				if (run !== opening) return;
-				if (!media) {
-					setCard({ status: "missing", message: "Couldn't tell which entry this is." });
-					await fillLists();
-					return;
-				}
-				const entry = fetchEntry(media);
-				if (run !== opening) return;
-				if (!entry.exists) {
-					setCard({ status: "missing", message: "Save the entry first." });
-					await fillLists();
-					return;
-				}
-				cardMedia = media;
-				saved = { selected: entry.selected, hidden: entry.hidden };
-				$store.set(`pending:${media.id}`, null);
-				$store.set(`saved:${media.id}`, null);
-				setCard({ status: "ready", lists: entry.lists, selected: entry.selected, hidden: entry.hidden });
-				await fillLists();
+				const media = findCardMedia(htmlText((modalTitle ?? popoverTitle)?.innerHTML), form.innerHTML ?? "");
+				if (!media)
+					cardState.set({
+						...cardState.get(),
+						status: "missing",
+						message: "Couldn't tell which entry this is.",
+					});
+				else if (hasFreshCopy(media.type)) loadEntry(media);
+
+				const id = `cl-section-${run}`;
+				root.setAttribute("data-custom-lists-section", "");
+				// w-0 min-w-full: no width of its own, the form's width. On the entry page the editor is a popover that
+				// takes its content's natural width, so long list names would otherwise widen it.
+				root.setAttribute("class", "UI-BasicField__field relative w-0 min-w-full space-y-1");
+				root.setInnerHTML(sectionHtml(id));
+				if (saveRow) saveRow.before(root);
+				else form.append(root);
+				const hide = hideState();
+				const s: CL.Section = {
+					id,
+					root,
+					box: ctx.dom.asElement(`${id}-box`),
+					hideBox: ctx.dom.asElement(`${id}-hide-box`),
+					listBoxes: [],
+					drawn: { hidden: `${hide.checked} ${hide.disabled}` },
+				};
+				section = s;
+				stopListening.push(ctx.dom.asElement(`${id}-hide`).addEventListener("click", () => toggleHidden()));
+				wireLists(s);
+				if (!media || cardState.get().status !== "loading") return;
+
+				// The copy of the lists is fetched from AniList, which holds up the plugin until it answers: after the
+				// skeleton is on its way
+				ctx.setTimeout(() => {
+					if (run !== opening) return;
+					try {
+						loadEntry(media);
+					} catch (err) {
+						logError("Could not load the entry's lists", err);
+						cardState.set({ ...cardState.get(), status: "error", message: errorText(err) });
+					}
+					fillLists();
+				}, 0);
 			} catch (err) {
 				logError("Could not load the entry's lists", err);
-				if (run === opening) {
-					setCard({ status: "error", message: errorText(err) });
-					await fillLists();
+				if (run === opening && section) {
+					cardState.set({ ...cardState.get(), status: "error", message: errorText(err) });
+					fillLists();
 				}
 			}
 		}
