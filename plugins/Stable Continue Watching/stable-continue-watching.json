@@ -1,0 +1,21 @@
+{
+	"id": "stable-continue-watching",
+	"name": "Stable Continue Watching",
+	"version": "1.0.0",
+	"manifestURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Stable%20Continue%20Watching/stable-continue-watching.json",
+	"language": "typescript",
+	"type": "plugin",
+	"description": "Stops Continue Watching cards from swapping places.",
+	"author": "rinkerbel",
+	"icon": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Stable%20Continue%20Watching/icon.png",
+	"website": "",
+	"lang": "en",
+	"readme": "https://github.com/rinkerbel/rinkerbel-seanime-extensions/tree/main/plugins/Stable%20Continue%20Watching",
+	"payloadURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/Stable%20Continue%20Watching/stable-continue-watching.ts",
+	"plugin": {
+		"version": "1",
+		"permissions": {
+			"scopes": []
+		}
+	}
+}
