@@ -18,7 +18,10 @@ declare namespace CEM {
 	type AnidbStore = KeyedStore<AnidbMatch>;
 
 	type CustomEpisodeMetadata = Partial<
-		Omit<$app.Metadata_EpisodeMetadata, "anidbId" | "tvdbId" | "episodeNumber" | "seasonNumber" | "absoluteEpisodeNumber" | "anidbEid">
+		Omit<
+			$app.Metadata_EpisodeMetadata,
+			"anidbId" | "tvdbId" | "episodeNumber" | "seasonNumber" | "absoluteEpisodeNumber" | "anidbEid"
+		>
 	> &
 		Pick<$app.Metadata_EpisodeMetadata, "episode">;
 
@@ -344,7 +347,10 @@ declare namespace CEM {
 		idFrom?: string;
 		/** TMDB episode metadata kept in the background for anime Seanime has no metadata for. */
 		/** aired: aired by AniList although TMDB dates it later. */
-		episodes?: Record<string, { title?: string; overview?: string; airDate?: string; length?: number; aired?: boolean }>;
+		episodes?: Record<
+			string,
+			{ title?: string; overview?: string; airDate?: string; length?: number; aired?: boolean }
+		>;
 		/** Failed since then (kept while it keeps failing): retried daily for a week, weekly after. */
 		failedSince?: number;
 		/** What the last refresh tried, in order, for the status line's hover panel. */
@@ -363,7 +369,14 @@ declare namespace CEM {
 	}
 
 	/** An AniDB episode: English title only, summary when AniDB has one. */
-	interface AnidbEpisode { n: number; eid: number; airDate?: string; length?: number; title?: string; summary?: string }
+	interface AnidbEpisode {
+		n: number;
+		eid: number;
+		airDate?: string;
+		length?: number;
+		title?: string;
+		summary?: string;
+	}
 
 	/** An AniDB anime's main episodes, from AniDB's HTTP API via proxy.ani.zip. */
 	interface AnidbAnime {

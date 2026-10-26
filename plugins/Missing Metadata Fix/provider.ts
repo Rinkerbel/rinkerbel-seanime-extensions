@@ -59,13 +59,29 @@ function init(): void {
 		if ($getUserPreference("debug-to-log") === "true") console.log(`[CEM] [debug] ${line}`);
 	});
 	/** An episode as the metadata hooks add it to Seanime's list */
-	$shared.define("newEpisode", () => (key: string, airDate = "", eid = 0, title = ""): $app.Metadata_EpisodeMetadata => {
-		const n = Number(key);
-		return {
-			anidbId: eid, tvdbId: 0, title, image: "", airDate, length: 0, summary: "", overview: "",
-			episodeNumber: n, episode: key, seasonNumber: 1, absoluteEpisodeNumber: n, anidbEid: eid, hasImage: false,
-		};
-	});
+	$shared.define(
+		"newEpisode",
+		() =>
+			(key: string, airDate = "", eid = 0, title = ""): $app.Metadata_EpisodeMetadata => {
+				const n = Number(key);
+				return {
+					anidbId: eid,
+					tvdbId: 0,
+					title,
+					image: "",
+					airDate,
+					length: 0,
+					summary: "",
+					overview: "",
+					episodeNumber: n,
+					episode: key,
+					seasonNumber: 1,
+					absoluteEpisodeNumber: n,
+					anidbEid: eid,
+					hasImage: false,
+				};
+			},
+	);
 	/**
 	 * The AniDB ID to give an anime Seanime has none for, and its match when the match is for that ID. A real AniDB ID
 	 * clears Seanime's "metadata retrieval not available" notice and lets AnimeTosho search by AniDB (anime and episode
@@ -77,13 +93,15 @@ function init(): void {
 		const anidb = $shared.use<CEM.AnidbStore>("anidb").get(mediaId);
 		// An automatic match only while its lookup is on (it stays stored for when it's back on)
 		if (overrides[mediaId]?.anidbNone) return { anidb };
-		const lookedUp = $getUserPreference("anidb-lookup") !== "false" && anidb?.status === "verified" ? anidb.aid : undefined;
+		const lookedUp =
+			$getUserPreference("anidb-lookup") !== "false" && anidb?.status === "verified" ? anidb.aid : undefined;
 		const aid = overrides[mediaId]?.anidbId ?? lookedUp;
 		let own = aid && anidb?.aid === aid ? anidb : undefined;
 		// Episodes whose override says "none" get none of it
 		const none = (overrides[mediaId]?.episodeOverrides ?? []).filter((o) => o.anidbNone).map((o) => o.aniDBEpisode);
 		if (own && none.length) {
-			const omit = <T>(r?: Record<string, T>) => r && Object.fromEntries(Object.entries(r).filter(([k]) => none.indexOf(k) === -1));
+			const omit = <T>(r?: Record<string, T>) =>
+				r && Object.fromEntries(Object.entries(r).filter(([k]) => none.indexOf(k) === -1));
 			own = { ...own, eids: omit(own.eids), airDates: omit(own.airDates), episodes: omit(own.episodes) };
 		}
 		return { aid, anidb, own };
@@ -92,7 +110,9 @@ function init(): void {
 
 	// The custom episode metadata the user (or Bulk Update) saved
 	$shared.define("database", (): CEM.SharedDatabase => {
-		const store = $shared.use<KeyedStoreOf>("keyedStore")<CEM.CustomEpisodeEntry>("CUSTOM_EPISODE_METADATA_STORAGE_V2");
+		const store = $shared.use<KeyedStoreOf>("keyedStore")<CEM.CustomEpisodeEntry>(
+			"CUSTOM_EPISODE_METADATA_STORAGE_V2",
+		);
 		const get = (mediaId: number) => store.get(mediaId) ?? { mediaId, data: {} };
 		return {
 			get,
@@ -122,7 +142,8 @@ function init(): void {
 	$shared.define("tmdbUsable", () => () => {
 		const token = `${$getUserPreference("tmdb-api") ?? ""}`.trim();
 		const verdict = $storage.get<{ print: string; ok: boolean }>("CEM_TMDB_TOKEN_CHECK");
-		const rejected = verdict && !verdict.ok && verdict.print === $shared.use<(token: string) => string>("tokenPrint")(token);
+		const rejected =
+			verdict && !verdict.ok && verdict.print === $shared.use<(token: string) => string>("tokenPrint")(token);
 		return /^eyJ[\w-]*\.[\w-]+\.[\w-]+$/.test(token) && !rejected;
 	});
 
@@ -135,7 +156,9 @@ function init(): void {
 	$shared.define("anidb", () => $shared.use<KeyedStoreOf>("keyedStore")<CEM.AnidbMatch>("ANIDB_MATCHES_V1"));
 
 	// How each anime maps onto TMDB and the stills found for it, kept on disk so restarts lose nothing
-	$shared.define("thumbnails", () => $shared.use<KeyedStoreOf>("keyedStore")<CEM.ThumbnailRecord>("TMDB_THUMBNAILS_V1"));
+	$shared.define("thumbnails", () =>
+		$shared.use<KeyedStoreOf>("keyedStore")<CEM.ThumbnailRecord>("TMDB_THUMBNAILS_V1"),
+	);
 
 	/**
 	 * Whether an anime's episode has aired: by the aired count Seanime's entry gives (the UI context keeps it in
@@ -146,7 +169,8 @@ function init(): void {
 	$shared.define("aired", () => (mediaId: number) => {
 		const count = Number($store.get(`CEM_AIRED_${mediaId}`)) || 0;
 		const today = new Date().toISOString().slice(0, 10);
-		return (key: string, airDate?: string) => /^\d+$/.test(key) && (Number(key) <= count || (!!airDate && airDate <= today));
+		return (key: string, airDate?: string) =>
+			/^\d+$/.test(key) && (Number(key) <= count || (!!airDate && airDate <= today));
 	});
 	type Aired = (mediaId: number) => (key: string, airDate?: string) => boolean;
 
@@ -161,7 +185,8 @@ function init(): void {
 		// A failed match only holds the episodes their overrides point at
 		const matched = !!thumbs && $shared.use<() => boolean>("tmdbUsable")();
 		const stills = matched && $getUserPreference("tmdb-thumbnails") === "true" ? Object.keys(thumbs.images) : [];
-		const filled = matched && $getUserPreference("tmdb-fill-missing") === "true" ? Object.keys(thumbs.episodes ?? {}) : [];
+		const filled =
+			matched && $getUserPreference("tmdb-fill-missing") === "true" ? Object.keys(thumbs.episodes ?? {}) : [];
 
 		const { aid, own } = $shared.use<AnidbInUse>("anidbInUse")(mediaId);
 		const eids = own?.eids ?? {};
@@ -192,7 +217,10 @@ function init(): void {
 	// and picks up its entry as soon as it exists.
 	$app.onAnimeMetadataRequested((e) => {
 		const hookDebug = $shared.use<(line: string) => void>("hookDebug");
-		const newEpisode = $shared.use<(key: string, airDate?: string, eid?: number, title?: string) => $app.Metadata_EpisodeMetadata>("newEpisode");
+		const newEpisode =
+			$shared.use<(key: string, airDate?: string, eid?: number, title?: string) => $app.Metadata_EpisodeMetadata>(
+				"newEpisode",
+			);
 		const debugging = $shared.use<() => boolean>("debugging")();
 		// Tell the UI context which anime Seanime is loading (entry page, Continue Watching, anywhere), so their TMDB
 		// data is fetched or refreshed on demand. Seanime caches metadata for an hour, but only for 100 anime: a page
@@ -206,19 +234,26 @@ function init(): void {
 			$store.set(`CEM_REQ_${e.mediaId}`, Date.now());
 			// When the queue last grew: the UI context waits for a page load to settle
 			$store.set("CEM_REQUESTED_LAST", Date.now());
-		} else if (debugging && recent) hookDebug(`hook: ${e.mediaId} not queued, checked ${Math.round((Date.now() - served) / 1000)}s ago`);
+		} else if (debugging && recent)
+			hookDebug(`hook: ${e.mediaId} not queued, checked ${Math.round((Date.now() - served) / 1000)}s ago`);
 
 		// Only for an anime Animap has no entry for (fallbackSupply checks)
-		const supply = e.animeMetadata ? $shared.use<(mediaId: number) => CEM.FallbackSupply | null>("fallbackSupply")(e.mediaId) : null;
+		const supply = e.animeMetadata
+			? $shared.use<(mediaId: number) => CEM.FallbackSupply | null>("fallbackSupply")(e.mediaId)
+			: null;
 		if (!supply || !e.animeMetadata) return e.next();
 		const { count, aid, eids, airDates } = supply;
 
 		// Assigned objects are stored as copies, so work on what's read back
 		if (!e.animeMetadata.episodes) e.animeMetadata.episodes = {};
 		const episodes = e.animeMetadata.episodes;
-		for (let n = 1; n <= count; n++) episodes[`${n}`] = newEpisode(`${n}`, airDates?.[`${n}`] ?? "", eids[`${n}`] ?? 0, `Episode ${n}`);
+		for (let n = 1; n <= count; n++)
+			episodes[`${n}`] = newEpisode(`${n}`, airDates?.[`${n}`] ?? "", eids[`${n}`] ?? 0, `Episode ${n}`);
 		e.animeMetadata.episodeCount = count;
-		if (debugging) hookDebug(`hook: ${e.mediaId} has no Animap entry; supplying ${count} episodes${aid ? `, AniDB ${aid}` : ""}`);
+		if (debugging)
+			hookDebug(
+				`hook: ${e.mediaId} has no Animap entry; supplying ${count} episodes${aid ? `, AniDB ${aid}` : ""}`,
+			);
 		if (aid) {
 			if (!e.animeMetadata.mappings) e.animeMetadata.mappings = {};
 			e.animeMetadata.mappings.anidbId = aid;
@@ -235,7 +270,10 @@ function init(): void {
 	$app.onAnimeMetadata((e) => {
 		if (!e.animeMetadata) return e.next();
 		const hookDebug = $shared.use<(line: string) => void>("hookDebug");
-		const newEpisode = $shared.use<(key: string, airDate?: string, eid?: number, title?: string) => $app.Metadata_EpisodeMetadata>("newEpisode");
+		const newEpisode =
+			$shared.use<(key: string, airDate?: string, eid?: number, title?: string) => $app.Metadata_EpisodeMetadata>(
+				"newEpisode",
+			);
 		const debugging = $shared.use<() => boolean>("debugging")();
 		if (!e.animeMetadata.episodes) e.animeMetadata.episodes = {};
 
@@ -247,7 +285,8 @@ function init(): void {
 		const fillOn = $getUserPreference("tmdb-fill-missing") === "true";
 		const aired = $shared.use<Aired>("aired")(e.mediaId);
 		// A title AniDB or Animap gives an episode it has no title for (as plainTitle in the UI context)
-		const generic = /^(episode|ep\.?|movie|special|ova|ona|oad|part)\s*[a-z]?\d+(\s*of\s*\d+)?$|^complete movie$|^第\s*\d+\s*話$/i;
+		const generic =
+			/^(episode|ep\.?|movie|special|ova|ona|oad|part)\s*[a-z]?\d+(\s*of\s*\d+)?$|^complete movie$|^第\s*\d+\s*話$/i;
 		const placeholder = (title?: string) => !title?.trim() || generic.test(title.trim());
 		const meta = e.animeMetadata;
 		const episodes = meta.episodes as Record<string, $app.Metadata_EpisodeMetadata>; // set above
@@ -278,16 +317,21 @@ function init(): void {
 
 		// Kept apart from Seanime's own episodes: the UI context leaves these out of Seanime's (cached) metadata
 		const notOwn = added.concat(customOnly);
-		if (notOwn.length || $store.get(`CEM_ADDED_${e.mediaId}`)) $store.set(`CEM_ADDED_${e.mediaId}`, notOwn.length ? JSON.stringify(notOwn) : "");
+		if (notOwn.length || $store.get(`CEM_ADDED_${e.mediaId}`))
+			$store.set(`CEM_ADDED_${e.mediaId}`, notOwn.length ? JSON.stringify(notOwn) : "");
 		const filledKeys = Object.keys(tmdbFilled).length;
 		if (filledKeys || $store.get(`CEM_TMDB_FILLED_${e.mediaId}`)) {
 			$store.set(`CEM_TMDB_FILLED_${e.mediaId}`, filledKeys ? JSON.stringify(tmdbFilled) : "");
 		}
 
 		if (debugging && (stills || fills || injected || Object.keys(entry.data).length)) {
-			const filled = fills ? `${fills} episodes filled in${added.length ? ` (${added.length} added)` : ""}, ` : "";
+			const filled = fills
+				? `${fills} episodes filled in${added.length ? ` (${added.length} added)` : ""}, `
+				: "";
 			const anidbAdded = injected ? `, AniDB ${injected} added` : "";
-			hookDebug(`hook: ${e.mediaId}: ${stills} TMDB stills, ${filled}${Object.keys(entry.data).length} custom episodes${anidbAdded}`);
+			hookDebug(
+				`hook: ${e.mediaId}: ${stills} TMDB stills, ${filled}${Object.keys(entry.data).length} custom episodes${anidbAdded}`,
+			);
 		}
 		keepForUi();
 		e.next();
@@ -302,7 +346,8 @@ function init(): void {
 			const gaps: Record<string, boolean> = {};
 			const ownTitles: Record<string, string> = {};
 			for (const [key, ep] of Object.entries(episodes)) {
-				if (ep && (!(ep.overview || ep.summary) || !ep.image || placeholder(ep.title) || !ep.length)) gaps[key] = true;
+				if (ep && (!(ep.overview || ep.summary) || !ep.image || placeholder(ep.title) || !ep.length))
+					gaps[key] = true;
 				if (ep?.title && /^\d+$/.test(key) && !supplied) ownTitles[key] = ep.title;
 			}
 			return { gaps, ownTitles };
@@ -353,8 +398,10 @@ function init(): void {
 
 		/** Episode overrides naming their AniDB episode: its ID over any other, and its data for the fill-in */
 		function anidbEpisodeOverrides() {
-			const overridden: Record<string, { title?: string; airDate?: string; length?: number; summary?: string }> = {};
-			for (const o of (($storage.get("TMDB_OVERRIDES") ?? {}) as Record<number, CEM.TMDBOverrides>)[e.mediaId]?.episodeOverrides ?? []) {
+			const overridden: Record<string, { title?: string; airDate?: string; length?: number; summary?: string }> =
+				{};
+			for (const o of (($storage.get("TMDB_OVERRIDES") ?? {}) as Record<number, CEM.TMDBOverrides>)[e.mediaId]
+				?.episodeOverrides ?? []) {
 				if (!o.aniDBEpisode || !o.anidbEid) continue;
 				const episode = episodes[o.aniDBEpisode];
 				if (episode) episode.anidbEid = episode.anidbId = o.anidbEid;
@@ -371,9 +418,12 @@ function init(): void {
 		 * deleted override would otherwise match again by its own dates or titles).
 		 */
 		function fillIn() {
-			const tmdbData = matched && fillOn ? record.episodes ?? {} : {};
+			const tmdbData = matched && fillOn ? (record.episodes ?? {}) : {};
 			// AniDB's data comes with its ID in use (the override, or a lookup's while that's on), fill-in switched on or not
-			const anidbData = { ...(own && own.status !== "none" && own.aid === mappings.anidbId ? own.episodes : {}), ...overridden };
+			const anidbData = {
+				...(own && own.status !== "none" && own.aid === mappings.anidbId ? own.episodes : {}),
+				...overridden,
+			};
 			// Aired episodes TMDB has and Seanime's list doesn't (yet)
 			for (const [key, data] of Object.entries(tmdbData)) {
 				if (!episodes[key] && (data.aired || aired(key, data.airDate))) addEpisode(key, "");
@@ -385,7 +435,8 @@ function init(): void {
 				const a = anidbData[key];
 				if (!ep || !(t || a) || entry.data[key]) continue;
 				const ownTitle = supplied || placeholder(ep.title) ? "" : ep.title;
-				const title = ownTitle || (!placeholder(t?.title) ? t?.title : "") || (!placeholder(a?.title) ? a?.title : "");
+				const title =
+					ownTitle || (!placeholder(t?.title) ? t?.title : "") || (!placeholder(a?.title) ? a?.title : "");
 				if (title && title !== ep.title) {
 					if (title === t?.title) (tmdbFilled[key] ??= {}).title = ep.title ?? "";
 					ep.title = title;
@@ -393,7 +444,8 @@ function init(): void {
 				if (!ep.title) ep.title = `Episode ${key}`;
 				const airDate = ep.airDate || a?.airDate || t?.airDate;
 				if (airDate && airDate !== ep.airDate) {
-					if (airDate === t?.airDate && airDate !== a?.airDate) (tmdbFilled[key] ??= {}).airDate = ep.airDate ?? "";
+					if (airDate === t?.airDate && airDate !== a?.airDate)
+						(tmdbFilled[key] ??= {}).airDate = ep.airDate ?? "";
 					ep.airDate = airDate;
 				}
 				const overview = ep.overview || ep.summary || t?.overview || a?.summary;
@@ -478,7 +530,6 @@ function init(): void {
 	// UI CONTEXT: the tray, overrides, matching and scheduling (one runtime, sections 1-9 below)
 	// ====================================================================================================================
 	$ui.register((ctx) => {
-
 		// ----------------------------------------------------------------------------------------------------------------
 		// 1. Setup: the tray, logging, how long things are kept, small helpers
 		// ----------------------------------------------------------------------------------------------------------------
@@ -505,7 +556,9 @@ function init(): void {
 		 * Building costly arguments is guarded by debugging, so normal installs don't pay for it.
 		 */
 		const text = (values: unknown[]) =>
-			values.map((v) => (typeof v === "string" ? v : v instanceof Error ? v.message : JSON.stringify(v))).join(" ");
+			values
+				.map((v) => (typeof v === "string" ? v : v instanceof Error ? v.message : JSON.stringify(v)))
+				.join(" ");
 		/**
 		 * Developer mode in the settings: every level also goes to seanime.log, so a whole session can be read back (the
 		 * debug panel keeps only the last 500 lines, and only development installs have one) and sent with a bug report
@@ -590,10 +643,13 @@ function init(): void {
 				v && typeof v === "object" && !Array.isArray(v)
 					? Object.keys(v)
 							.sort()
-							.reduce((out, k) => {
-								out[k] = (v as Record<string, unknown>)[k];
-								return out;
-							}, {} as Record<string, unknown>)
+							.reduce(
+								(out, k) => {
+									out[k] = (v as Record<string, unknown>)[k];
+									return out;
+								},
+								{} as Record<string, unknown>,
+							)
 					: v,
 			);
 		const sleep = (ms: number) => new Promise<void>((resolve) => ctx.setTimeout(() => resolve(), ms));
@@ -657,7 +713,8 @@ function init(): void {
 		function tokenProblem() {
 			if (!tmdbSetting) return "no TMDB API Read Access Token in the plugin settings";
 			if (!/^eyJ[\w-]*\.[\w-]+\.[\w-]+$/.test(tmdbSetting)) {
-				if (/^[0-9a-f]{32}$/i.test(tmdbSetting)) return "the TMDB setting holds an API key, not the API Read Access Token (eyJ…)";
+				if (/^[0-9a-f]{32}$/i.test(tmdbSetting))
+					return "the TMDB setting holds an API key, not the API Read Access Token (eyJ…)";
 				return "the TMDB setting isn't an API Read Access Token (eyJ…)";
 			}
 			if (tokenVerdict?.print === tokenPrint && !tokenVerdict.ok) return TOKEN_REJECTED;
@@ -691,7 +748,9 @@ function init(): void {
 		 * lacks anything (an overview, a thumbnail, the whole episode) only shows once TMDB's episodes are known.
 		 */
 		const wantsMatch = (_mediaId: number) => tmdbOn();
-		const currentMedia = ctx.state<{ id: number; banner: string; title: string; type: "tv" | "movie" } | null>(null);
+		const currentMedia = ctx.state<{ id: number; banner: string; title: string; type: "tv" | "movie" } | null>(
+			null,
+		);
 		const currEditedEp = ctx.state<CEM.CustomEpisodeMetadata | null>(null);
 
 		const tmdb = {
@@ -700,7 +759,9 @@ function init(): void {
 			/** The action button running (its handler ID), or "" */
 			isFetching: ctx.state<string>(""),
 			search: async (query: string, type: "tv" | "movie" | "multi") =>
-				tmdb.__fetch__<CEM.TMDBSearchResults>(`search/${type}?query=${encodeURIComponent(query)}&include_adult=true&language=en-US&page=1`),
+				tmdb.__fetch__<CEM.TMDBSearchResults>(
+					`search/${type}?query=${encodeURIComponent(query)}&include_adult=true&language=en-US&page=1`,
+				),
 			getDetails: <T extends "tv" | "movie">(tmdbId: number, type: T) =>
 				tmdb.__fetch__<T extends "tv" ? CEM.TMDBTVShowDetails : CEM.TMDBMovieDetails>(`${type}/${tmdbId}`),
 			/**
@@ -730,7 +791,10 @@ function init(): void {
 			__fetch__: async <T>(endpoint: string) => {
 				const url = new URL(`${tmdb.baseUri}/${endpoint}`);
 				url.searchParams.set("language", "en-US");
-				const get = () => ctx.fetch(url.toString(), { headers: { Authorization: `Bearer ${tmdb.API_KEY}`, Accept: "application/json" } });
+				const get = () =>
+					ctx.fetch(url.toString(), {
+						headers: { Authorization: `Bearer ${tmdb.API_KEY}`, Accept: "application/json" },
+					});
 
 				// TMDB allows roughly 40 requests a second; on a 429 wait as asked and try again
 				log.debug("TMDB request", endpoint);
@@ -764,7 +828,11 @@ function init(): void {
 				__id__: "TMDB_OVERRIDES",
 				records: () => $storage.get<Record<number, CEM.TMDBOverrides>>(tmdb.overrides.__id__) ?? {},
 				get: (mediaId: number) => tmdb.overrides.records()[mediaId] ?? { mediaId, episodeOverrides: [] },
-				set: (mediaId: number, override: Partial<Omit<CEM.TMDBOverrides, "mediaId">>, overwrite: boolean = false) => {
+				set: (
+					mediaId: number,
+					override: Partial<Omit<CEM.TMDBOverrides, "mediaId">>,
+					overwrite: boolean = false,
+				) => {
 					const records = tmdb.overrides.records();
 					const oldData = tmdb.overrides.get(mediaId);
 					const both = [...oldData.episodeOverrides, ...(override.episodeOverrides ?? [])];
@@ -789,7 +857,11 @@ function init(): void {
 				/** Clears the media fields, keeping the episode overrides and the ignore-warnings choice */
 				removeMediaOverride: (mediaId: number) => {
 					const { episodeOverrides, ignoreWarnings } = tmdb.overrides.get(mediaId);
-					tmdb.overrides.set(mediaId, { episodeOverrides, ...(ignoreWarnings ? { ignoreWarnings } : {}) }, true);
+					tmdb.overrides.set(
+						mediaId,
+						{ episodeOverrides, ...(ignoreWarnings ? { ignoreWarnings } : {}) },
+						true,
+					);
 				},
 				episode: {
 					fieldRefs: {
@@ -804,14 +876,15 @@ function init(): void {
 						tmdbId: data.tmdbNone ? "none" : formatTmdbId(data.tmdbId, data.tmdbType),
 						tmdbSeason: data.tmdbSeason?.toString() ?? "",
 						tmdbEpisode: data.tmdbEpisode?.toString() ?? "",
-						anidbId: data.anidbNone ? "none" : data.anidbId?.toString() ?? "",
+						anidbId: data.anidbNone ? "none" : (data.anidbId?.toString() ?? ""),
 						anidbEpisode: data.anidbEpisode ?? "",
 					}),
 					fill: (data: CEM.TMDBOverrides["episodeOverrides"][number]) => {
 						const refs: Record<string, $ui.FieldRef<string>> = tmdb.overrides.episode.fieldRefs;
 						for (const [k, v] of Object.entries(tmdb.overrides.episode.values(data))) refs[k].setValue(v);
 					},
-					resetFieldRefs: () => Object.values(tmdb.overrides.episode.fieldRefs).forEach((fr) => fr.setValue("")),
+					resetFieldRefs: () =>
+						Object.values(tmdb.overrides.episode.fieldRefs).forEach((fr) => fr.setValue("")),
 					/** placeholderAid: the anime's AniDB ID in use, for an AniDB Episode entered without an AniDB ID */
 					save: async (mediaId: number, aniDBEpisode: string, placeholderAid: string) => {
 						const refs = tmdb.overrides.episode.fieldRefs;
@@ -823,9 +896,12 @@ function init(): void {
 						else {
 							readTmdbIdField(refs.tmdbId.current, update);
 							if (update.tmdbType === "movie" && (tmdbSeason.trim() || tmdbEpisode.trim()))
-								throw new Error("A TMDB movie is one episode: clear the TMDB Season and Episode, or enter a show's ID (s<id>).");
+								throw new Error(
+									"A TMDB movie is one episode: clear the TMDB Season and Episode, or enter a show's ID (s<id>).",
+								);
 							if (tmdbSeason.length && !isNaN(Number(tmdbSeason))) update.tmdbSeason = Number(tmdbSeason);
-							if (tmdbEpisode.length && !isNaN(Number(tmdbEpisode))) update.tmdbEpisode = Number(tmdbEpisode);
+							if (tmdbEpisode.length && !isNaN(Number(tmdbEpisode)))
+								update.tmdbEpisode = Number(tmdbEpisode);
 						}
 
 						// AniDB: both fields or neither (the ID defaults to the anime's), checked against AniDB's episode list
@@ -836,17 +912,27 @@ function init(): void {
 							const aid = Number(aidText || placeholderAid);
 							if (!Number.isInteger(aid) || aid < 1)
 								throw new Error(
-									aidText ? `AniDB ID "${aidText}" isn't a number.` : "Enter the AniDB ID too: this anime has none yet.",
+									aidText
+										? `AniDB ID "${aidText}" isn't a number.`
+										: "Enter the AniDB ID too: this anime has none yet.",
 								);
 							if (!new RegExp(`^[${ANIDB_LETTERS}]?\\d+$`).test(epText))
-								throw new Error(`AniDB Episode "${epText}" isn't an episode like "12", or a lettered one (${ANIDB_LETTER_LIST}).`);
+								throw new Error(
+									`AniDB Episode "${epText}" isn't an episode like "12", or a lettered one (${ANIDB_LETTER_LIST}).`,
+								);
 							const letter = /^\d/.test(epText) ? "" : epText[0];
 							let anime = await anidbAnime(aid);
 							// An entry cached before every lettered type was kept: fetched again for them
-							if (letter && letter !== "S" && anime && !anime.lettered) anime = await anidbAnime(aid, true);
-							if (anime === undefined) throw new Error("Couldn't reach AniDB right now: try saving again in a minute.");
+							if (letter && letter !== "S" && anime && !anime.lettered)
+								anime = await anidbAnime(aid, true);
+							if (anime === undefined)
+								throw new Error("Couldn't reach AniDB right now: try saving again in a minute.");
 							if (anime === null) throw new Error(`AniDB has no anime ${aid}.`);
-							const list = !letter ? anime.main : letter === "S" ? anime.specials ?? [] : anime.lettered?.[letter] ?? [];
+							const list = !letter
+								? anime.main
+								: letter === "S"
+									? (anime.specials ?? [])
+									: (anime.lettered?.[letter] ?? []);
 							const ep = list.find((x) => x.n === Number(epText.replace(/^[A-Z]/, "")));
 							if (!ep) throw new Error(`AniDB ${aid} has no episode ${epText}.`);
 							const { eid, n: _n, ...data } = ep;
@@ -866,17 +952,24 @@ function init(): void {
 					},
 					ignoreWarnings: ctx.fieldRef<boolean>(false),
 					/** The fields' text for a saved media override */
-					values: (data: Omit<CEM.TMDBOverrides, "mediaId" | "episodeOverrides">): Record<string, string> => ({
+					values: (
+						data: Omit<CEM.TMDBOverrides, "mediaId" | "episodeOverrides">,
+					): Record<string, string> => ({
 						tmdbId: data.tmdbNone ? "none" : formatTmdbId(data.tmdbId, data.tmdbType),
 						tmdbEpisodes: formatTmdbEpisodes(data),
-						anidbId: data.anidbNone ? "none" : data.anidbId?.toString() ?? "",
-						anidbEpisodes: formatAnidbEpisodes({ offset: data.anidbOffset, specials: data.anidbSpecials, letter: data.anidbLetter }),
+						anidbId: data.anidbNone ? "none" : (data.anidbId?.toString() ?? ""),
+						anidbEpisodes: formatAnidbEpisodes({
+							offset: data.anidbOffset,
+							specials: data.anidbSpecials,
+							letter: data.anidbLetter,
+						}),
 					}),
 					fill: (data: Omit<CEM.TMDBOverrides, "mediaId" | "episodeOverrides">) => {
 						const refs: Record<string, $ui.FieldRef<string>> = tmdb.overrides.media.fieldRefs;
 						for (const [k, v] of Object.entries(tmdb.overrides.media.values(data))) refs[k].setValue(v);
 					},
-					resetFieldRefs: () => Object.values(tmdb.overrides.media.fieldRefs).forEach((fr) => fr.setValue("")),
+					resetFieldRefs: () =>
+						Object.values(tmdb.overrides.media.fieldRefs).forEach((fr) => fr.setValue("")),
 					save: (mediaId: number) => {
 						const update: Omit<CEM.TMDBOverrides, "mediaId" | "episodeOverrides"> = {};
 						const refs = tmdb.overrides.media.fieldRefs;
@@ -888,7 +981,9 @@ function init(): void {
 							readTmdbIdField(refs.tmdbId.current, update);
 							if (tmdbEpisodes) {
 								if (update.tmdbType === "movie")
-									throw new Error("A TMDB movie has no seasons: clear the TMDB Episodes, or enter a show's ID (s<id>).");
+									throw new Error(
+										"A TMDB movie has no seasons: clear the TMDB Episodes, or enter a show's ID (s<id>).",
+									);
 								const episodes = parseTmdbEpisodes(tmdbEpisodes);
 								if (typeof episodes === "string") throw new Error(`TMDB Episodes: ${episodes}`);
 								Object.assign(update, episodes);
@@ -907,7 +1002,8 @@ function init(): void {
 								if (episodes.specials) update.anidbSpecials = true;
 								if (episodes.letter) update.anidbLetter = episodes.letter;
 								if (!update.anidbId) {
-									if (!Number(shown.anidbId)) throw new Error("Enter the AniDB ID too: this anime has none yet.");
+									if (!Number(shown.anidbId))
+										throw new Error("Enter the AniDB ID too: this anime has none yet.");
 									update.anidbId = Number(shown.anidbId);
 								}
 							}
@@ -932,10 +1028,14 @@ function init(): void {
 		 * ctx.anime.getAnimeMetadata when Seanime has no metadata. Episodes the plugin added from TMDB are left out.
 		 */
 		async function loadMetadata(mediaId: number): Promise<$app.Metadata_AnimeMetadata | undefined> {
-			const kept = storeJson<{ at: number; metadata: $app.Metadata_AnimeMetadata } | undefined>(`CEM_META_${mediaId}`, undefined);
+			const kept = storeJson<{ at: number; metadata: $app.Metadata_AnimeMetadata } | undefined>(
+				`CEM_META_${mediaId}`,
+				undefined,
+			);
 			// Not older than an hour, and built since the plugin last cleared Seanime's cache (strictly after: one built
 			// in the same millisecond as a clear may predate it)
-			if (kept && Date.now() - kept.at < HOUR && kept.at > (Number($store.get("CEM_META_CLEARED")) || 0)) return kept.metadata;
+			if (kept && Date.now() - kept.at < HOUR && kept.at > (Number($store.get("CEM_META_CLEARED")) || 0))
+				return kept.metadata;
 			log.debug(`${mediaId}: no usable kept metadata copy, asking Seanime`);
 			// Seanime rejects a failed metadata request from outside the plugin's event loop, which can crash the whole
 			// server: it's only asked for anime Animap has (or the plugin supplies the episode list for)
@@ -999,7 +1099,10 @@ function init(): void {
 		 */
 		function withoutAdded(mediaId: number, metadata: $app.Metadata_AnimeMetadata | undefined) {
 			const added = storeJson<string[]>(`CEM_ADDED_${mediaId}`, []);
-			const filled = storeJson<Record<string, { title?: string; airDate?: string }>>(`CEM_TMDB_FILLED_${mediaId}`, {});
+			const filled = storeJson<Record<string, { title?: string; airDate?: string }>>(
+				`CEM_TMDB_FILLED_${mediaId}`,
+				{},
+			);
 			if (!metadata || !(added.length || Object.keys(filled).length)) return metadata;
 			const episodes: Record<string, $app.Metadata_EpisodeMetadata> = {};
 			for (const [key, ep] of Object.entries(metadata.episodes ?? {})) {
@@ -1022,12 +1125,17 @@ function init(): void {
 		 */
 		function episodeCount(media: $app.AL_BaseAnime | undefined) {
 			const next = Number(media?.nextAiringEpisode?.episode) || 0;
-			const count = media?.status === "NOT_YET_RELEASED" ? 0 : next ? Math.max(0, next - 1) : Number(media?.episodes) || 0;
+			const count =
+				media?.status === "NOT_YET_RELEASED" ? 0 : next ? Math.max(0, next - 1) : Number(media?.episodes) || 0;
 			if (media?.id) $store.set(`CEM_AIRED_${media.id}`, count);
 			return count;
 		}
 		/** episodeCount of an anime by its ID; 0 when AniList's entry can't be loaded */
-		const entryEpisodeCount = (mediaId: number) => ctx.anime.getAnimeEntry(mediaId).then((entry) => episodeCount(entry.media), () => 0);
+		const entryEpisodeCount = (mediaId: number) =>
+			ctx.anime.getAnimeEntry(mediaId).then(
+				(entry) => episodeCount(entry.media),
+				() => 0,
+			);
 
 		/** Keep a generated episode list (Animap has no entry) in step with newly aired episodes. True when it changed. */
 		function syncEpisodeCount(mediaId: number, media: $app.AL_BaseAnime | undefined) {
@@ -1045,7 +1153,7 @@ function init(): void {
 		async function checkAnimap(mediaId: number) {
 			const previous = animap.get(mediaId);
 			// When Animap was first found to have no entry; a re-check that finds the same keeps it
-			const since = previous?.fallback ? previous.since ?? Date.now() : Date.now();
+			const since = previous?.fallback ? (previous.since ?? Date.now()) : Date.now();
 			animap.set(mediaId, null);
 			clearMetadataCache();
 			if (isCustomSource(mediaId)) return; // custom sources provide their own metadata
@@ -1060,13 +1168,21 @@ function init(): void {
 					fallback = true;
 				}
 			if (!fallback) {
-				if (previous?.fallback) log.info(`${mediaId}: Animap has an entry for this anime now; Seanime's own metadata is used again`);
+				if (previous?.fallback)
+					log.info(
+						`${mediaId}: Animap has an entry for this anime now; Seanime's own metadata is used again`,
+					);
 				else log.step(`${mediaId}: Animap re-check: has an entry`);
 				return animap.set(mediaId, { fallback: false, episodeCount: 0, checkedAt: Date.now() });
 			}
 			log.step(`${mediaId}: Animap re-check: still no entry`);
 
-			animap.set(mediaId, { fallback: true, episodeCount: await entryEpisodeCount(mediaId), checkedAt: Date.now(), since });
+			animap.set(mediaId, {
+				fallback: true,
+				episodeCount: await entryEpisodeCount(mediaId),
+				checkedAt: Date.now(),
+				since,
+			});
 			clearMetadataCache();
 		}
 
@@ -1084,8 +1200,14 @@ function init(): void {
 				missing = true;
 			}
 			const count = missing ? await entryEpisodeCount(mediaId) : 0;
-			animap.set(mediaId, { fallback: missing, episodeCount: count, checkedAt: Date.now(), ...(missing ? { since: Date.now() } : {}) });
-			if (missing) log.info(`${mediaId}: Seanime has no metadata for this anime; the plugin supplies its episode list`);
+			animap.set(mediaId, {
+				fallback: missing,
+				episodeCount: count,
+				checkedAt: Date.now(),
+				...(missing ? { since: Date.now() } : {}),
+			});
+			if (missing)
+				log.info(`${mediaId}: Seanime has no metadata for this anime; the plugin supplies its episode list`);
 			else log.step(`${mediaId}: Seanime has metadata for this anime`);
 		}
 
@@ -1117,7 +1239,8 @@ function init(): void {
 
 				if (title.length) update.title = title;
 				if (length.length) {
-					if (isNaN(Number(length))) throw new Error(`Field length "${length}" is invalid. Length must be a valid number`);
+					if (isNaN(Number(length)))
+						throw new Error(`Field length "${length}" is invalid. Length must be a valid number`);
 					update.length = Number(length);
 				}
 				if (airDate.length) {
@@ -1127,7 +1250,8 @@ function init(): void {
 				}
 				if (overview.length) update.overview = overview;
 				if (image.length) {
-					if (!/^https?:\/\/\S+$/i.test(image)) throw new Error(`Field image is invalid. Please enter an http(s) URL without spaces.`);
+					if (!/^https?:\/\/\S+$/i.test(image))
+						throw new Error(`Field image is invalid. Please enter an http(s) URL without spaces.`);
 					update.image = image;
 				}
 
@@ -1192,7 +1316,9 @@ function init(): void {
 				),
 				tray.flex([
 					tray.tooltip(
-						actionButton(`episode-autofill-${media.id}`, "Auto-fill", {}, () => runEpisodeAutoFill(media.id, episode.episode)),
+						actionButton(`episode-autofill-${media.id}`, "Auto-fill", {}, () =>
+							runEpisodeAutoFill(media.id, episode.episode),
+						),
 						{ text: tmdbOn() ? "Autofill from AniDB and TMDB" : "Autofill from AniDB" },
 					),
 					overridesModal(media, episode.episode),
@@ -1202,13 +1328,17 @@ function init(): void {
 						size: "md",
 						// Only with something saved to delete; it sits next to Save, so it asks first (see confirmCover)
 						style: { display: database.get(media.id).data[episode.episode] ? "block" : "none" },
-						onClick: ctx.eventHandler(`del-${media.id}`, () => confirming.set({ which: "episode", done: false })),
+						onClick: ctx.eventHandler(`del-${media.id}`, () =>
+							confirming.set({ which: "episode", done: false }),
+						),
 					}),
 					withDot(
 						tray.button("Save", {
 							intent: "primary",
 							size: "md",
-							onClick: ctx.eventHandler(`save-${media.id}`, () => saveCustomEpisode(media.id, episode.episode)),
+							onClick: ctx.eventHandler(`save-${media.id}`, () =>
+								saveCustomEpisode(media.id, episode.episode),
+							),
 						}),
 						unsaved.get().editor,
 						"bg-blue-500",
@@ -1228,9 +1358,15 @@ function init(): void {
 				}
 				checkUnsaved();
 				const names: Record<string, string> = {
-					title: "title", length: "duration", airDate: "air date", overview: "overview", image: "image",
+					title: "title",
+					length: "duration",
+					airDate: "air date",
+					overview: "overview",
+					image: "image",
 				};
-				const filled = Object.keys(data).map((k) => names[k]).join(", ");
+				const filled = Object.keys(data)
+					.map((k) => names[k])
+					.join(", ");
 				ctx.toast.success(`Filled the ${filled} from ${from.join(" and ")}. Review and press Save.`);
 			} catch (e) {
 				log.step(`${mediaId}: episode Auto-fill found nothing: ${(e as Error).message}`);
@@ -1250,7 +1386,9 @@ function init(): void {
 			// An episode pointing at its own show or movie needs no match for the anime, nor the switches (by hand)
 			const override = tmdb.overrides.get(mediaId);
 			const ownOverride = override.episodeOverrides.filter((o) => o.aniDBEpisode === key && o.tmdbId);
-			const own = tmdb.API_KEY ? overrideEpisodes({ ...override, episodeOverrides: ownOverride }, {}, undefined)[key] : undefined;
+			const own = tmdb.API_KEY
+				? overrideEpisodes({ ...override, episodeOverrides: ownOverride }, {}, undefined)[key]
+				: undefined;
 			const noneHere = override.episodeOverrides.some((o) => o.aniDBEpisode === key && o.tmdbNone);
 			if (noneHere || (override.tmdbNone && !own)) why = "TMDB is set to none in your overrides";
 			else if (own || tmdbOn()) {
@@ -1273,13 +1411,20 @@ function init(): void {
 					if (ep.air_date) data.airDate = ep.air_date;
 					if (ep.overview) data.overview = ep.overview;
 					if (ep.still_path) data.image = tmdbImage(ep.still_path);
-					from.push(target?.movie ? `TMDB movie ${target.tmdbId}` : `TMDB S${target?.season}E${target?.episode}`);
+					from.push(
+						target?.movie ? `TMDB movie ${target.tmdbId}` : `TMDB S${target?.season}E${target?.episode}`,
+					);
 				} else if (target) {
-					const where = target.movie ? `movie ${target.tmdbId}` : `S${target.season}E${target.episode} on ${target.tmdbId}`;
+					const where = target.movie
+						? `movie ${target.tmdbId}`
+						: `S${target.season}E${target.episode} on ${target.tmdbId}`;
 					why = `TMDB has no ${where}`;
 				} else if (record?.status === "matched") why = `TMDB's match has no episode ${key}`;
 			} else why = tmdbMissing || "TMDB stills and fill-in are off";
-			if (await needsAnidb(mediaId)) await refreshAnidb(mediaId).catch((e) => log.debug(`${mediaId}: AniDB lookup for Auto-fill failed:`, e));
+			if (await needsAnidb(mediaId))
+				await refreshAnidb(mediaId).catch((e) =>
+					log.debug(`${mediaId}: AniDB lookup for Auto-fill failed:`, e),
+				);
 			const ep = anidbEpisodes(mediaId)[key];
 			const before = Object.keys(data).length;
 			if (ep?.title && !data.title && plainTitle(ep.title)) data.title = ep.title;
@@ -1288,7 +1433,9 @@ function init(): void {
 			// AniDB's air dates come first, as everywhere else
 			if (ep?.airDate && ep.airDate !== data.airDate) data.airDate = ep.airDate;
 			if (Object.keys(data).length > before)
-				from.push(`AniDB ${override.episodeOverrides.find((o) => o.aniDBEpisode === key)?.anidbId ?? anidbStore.get(mediaId)?.aid}`);
+				from.push(
+					`AniDB ${override.episodeOverrides.find((o) => o.aniDBEpisode === key)?.anidbId ?? anidbStore.get(mediaId)?.aid}`,
+				);
 			if (!from.length) throw new Error(`Nothing to fill for episode ${key}${why ? `: ${why}` : ""}.`);
 			return { data, from };
 		}
@@ -1349,7 +1496,9 @@ function init(): void {
 			const deleteAll = () =>
 				tray.button("Delete All", {
 					intent: "alert",
-					onClick: ctx.eventHandler(`cem-del-all-${media.id}`, () => confirming.set({ which: "all", done: false })),
+					onClick: ctx.eventHandler(`cem-del-all-${media.id}`, () =>
+						confirming.set({ which: "all", done: false }),
+					),
 				});
 			return tray.div(
 				[
@@ -1362,7 +1511,9 @@ function init(): void {
 						],
 						{ className: "items-center" },
 					),
-					tray.div(customEps.sort((a, b) => Number(a.episode) - Number(b.episode)).map(row), { className: "space-y-2" }),
+					tray.div(customEps.sort((a, b) => Number(a.episode) - Number(b.episode)).map(row), {
+						className: "space-y-2",
+					}),
 					// Nothing listed: the note in the middle of the box
 					...(customEps.length
 						? []
@@ -1377,10 +1528,16 @@ function init(): void {
 								),
 							]),
 				],
-				{ className: "flex flex-col gap-2 p-2 border rounded-xl bg-gray-800 overflow-scroll", style: { height: "24rem" } },
+				{
+					className: "flex flex-col gap-2 p-2 border rounded-xl bg-gray-800 overflow-scroll",
+					style: { height: "24rem" },
+				},
 			);
 		}
-		function confirmCover(media: NonNullable<ReturnType<typeof currentMedia.get>>, episode: CEM.CustomEpisodeMetadata | null) {
+		function confirmCover(
+			media: NonNullable<ReturnType<typeof currentMedia.get>>,
+			episode: CEM.CustomEpisodeMetadata | null,
+		) {
 			const c = confirming.get();
 			if (!c) return tray.div([], { style: { display: "none" } });
 			const all = c.which === "all";
@@ -1403,9 +1560,14 @@ function init(): void {
 				[
 					tray.div(
 						[
-							tray.text(all ? "Delete all custom metadata?" : `Delete episode ${episode?.episode}'s custom metadata?`, {
-								className: "font-semibold",
-							}),
+							tray.text(
+								all
+									? "Delete all custom metadata?"
+									: `Delete episode ${episode?.episode}'s custom metadata?`,
+								{
+									className: "font-semibold",
+								},
+							),
 							tray.text(
 								all
 									? `Everything you saved for ${media.title}'s episodes is removed.`
@@ -1428,7 +1590,10 @@ function init(): void {
 								{ className: "justify-end" },
 							),
 						],
-						{ className: "flex flex-col gap-3 p-4 border rounded-xl bg-[--paper] w-full", style: { maxWidth: "22rem" } },
+						{
+							className: "flex flex-col gap-3 p-4 border rounded-xl bg-[--paper] w-full",
+							style: { maxWidth: "22rem" },
+						},
 					),
 				],
 				{
@@ -1448,7 +1613,10 @@ function init(): void {
 			);
 		}
 
-		function isAnimeEpisode(ep: $app.Anime_Episode | $app.Onlinestream_Episode, type: string): ep is $app.Anime_Episode {
+		function isAnimeEpisode(
+			ep: $app.Anime_Episode | $app.Onlinestream_Episode,
+			type: string,
+		): ep is $app.Anime_Episode {
 			return type !== "onlinestream";
 		}
 
@@ -1464,9 +1632,12 @@ function init(): void {
 				},
 			});
 
-			return tray.div([bannerDiv, tray.div(container, { style: { position: "relative", height: "100%" } }), cover], {
-				style: { position: "relative", height: "33.5rem" },
-			});
+			return tray.div(
+				[bannerDiv, tray.div(container, { style: { position: "relative", height: "100%" } }), cover],
+				{
+					style: { position: "relative", height: "33.5rem" },
+				},
+			);
 		}
 
 		/** Label widths: the overrides modal's fields, the episode editor's */
@@ -1485,7 +1656,10 @@ function init(): void {
 						className: "flex items-center whitespace-nowrap px-3 bg-gray-800 rounded-l-xl border text-sm",
 						style: {
 							opacity: params?.disabled ? "0.5" : "1",
-							marginRight: "-1px", width: labelWidth, minWidth: labelWidth, flexShrink: "0",
+							marginRight: "-1px",
+							width: labelWidth,
+							minWidth: labelWidth,
+							flexShrink: "0",
 						},
 					}),
 					tray.input({
@@ -1520,7 +1694,9 @@ function init(): void {
 				size: "md",
 				...props,
 				intent,
-				className: [props.className, "cem-action", `cem-${intent}`, running === id ? "cem-busy" : ""].filter(Boolean).join(" "),
+				className: [props.className, "cem-action", `cem-${intent}`, running === id ? "cem-busy" : ""]
+					.filter(Boolean)
+					.join(" "),
 				disabled: !!props.disabled || (!!running && running !== id),
 				onClick: ctx.eventHandler(id, async () => {
 					if (tmdb.isFetching.get()) return;
@@ -1572,14 +1748,23 @@ function init(): void {
 		 */
 		function withDot(button: any, show: boolean, color: string, room = false) {
 			const dot = {
-				position: "absolute", top: "-0.25rem", right: "-0.25rem", width: "0.625rem", height: "0.625rem",
+				position: "absolute",
+				top: "-0.25rem",
+				right: "-0.25rem",
+				width: "0.625rem",
+				height: "0.625rem",
 				display: show ? "block" : "none",
 			};
 			return tray.div(
 				[
-					tray.css("@media (prefers-reduced-motion: reduce) { .animate-ping { animation: none; opacity: 0; } }"),
+					tray.css(
+						"@media (prefers-reduced-motion: reduce) { .animate-ping { animation: none; opacity: 0; } }",
+					),
 					button,
-					tray.div([], { className: `rounded-full ${color} animate-ping pointer-events-none`, style: { ...dot, opacity: "0.75" } }),
+					tray.div([], {
+						className: `rounded-full ${color} animate-ping pointer-events-none`,
+						style: { ...dot, opacity: "0.75" },
+					}),
 					tray.div([], { className: `rounded-full ${color} pointer-events-none`, style: dot }),
 				],
 				{ className: "relative w-fit", style: show && room ? { marginRight: "0.5625rem" } : {} },
@@ -1610,7 +1795,11 @@ function init(): void {
 				className: "text-xs text-[--muted]",
 				style: {
 					visibility: visible ? "visible" : "hidden",
-					whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", width: "0", minWidth: "100%",
+					whiteSpace: "nowrap",
+					overflow: "hidden",
+					textOverflow: "ellipsis",
+					width: "0",
+					minWidth: "100%",
 				},
 			});
 		}
@@ -1650,19 +1839,26 @@ function init(): void {
 		/** The letters AniDB numbers its episode types with: specials, credits (openings, endings), trailers, parodies, other */
 		const ANIDB_LETTERS = "SCTPO";
 		const ANIDB_LETTER_LIST = "S1 specials, C1 credits, T1 trailers, P1 parodies, O1 other";
-		const noneIn = (refs: Record<string, $ui.FieldRef<string>>, keys: string[]) => keys.some((k) => isNone(refs[k].current));
+		const noneIn = (refs: Record<string, $ui.FieldRef<string>>, keys: string[]) =>
+			keys.some((k) => isNone(refs[k].current));
 		/** The TMDB ID field of an override into the override; throws on one that isn't an ID */
 		function readTmdbIdField(value: string, update: { tmdbId?: number; tmdbType?: "tv" | "movie" }) {
 			if (!value.trim().length) return;
 			const parsed = parseTmdbId(value);
-			if (!parsed) throw new Error(`TMDB ID "${value}" isn't an ID like s1429 (a show), m371371 (a movie) or a TMDB link.`);
+			if (!parsed)
+				throw new Error(
+					`TMDB ID "${value}" isn't an ID like s1429 (a show), m371371 (a movie) or a TMDB link.`,
+				);
 			update.tmdbId = parsed.id;
 			if (parsed.type) update.tmdbType = parsed.type;
 		}
 		/** "1-4, 6" -> [1, 2, 3, 4, 6]; undefined when it isn't a season list. */
 		function parseSeasons(value: string): number[] | undefined {
 			const out: number[] = [];
-			for (const part of value.split(",").map((p) => p.trim()).filter((p) => p.length)) {
+			for (const part of value
+				.split(",")
+				.map((p) => p.trim())
+				.filter((p) => p.length)) {
 				const range = part.match(/^(\d+)\s*-\s*(\d+)$/);
 				if (range) {
 					const [from, to] = [Number(range[1]), Number(range[2])];
@@ -1681,10 +1877,14 @@ function init(): void {
 		 */
 		function parseRanges(value: string): CEM.TMDBRange[] | string {
 			const out: CEM.TMDBRange[] = [];
-			for (const part of value.split(",").map((p) => p.trim()).filter((p) => p.length)) {
+			for (const part of value
+				.split(",")
+				.map((p) => p.trim())
+				.filter((p) => p.length)) {
 				const m = part.match(/^S(\d+)(?:E(\d+))?(?:\s*-\s*(?:S(\d+))?(?:E?(\d+))?)?$/i);
 				const dash = part.indexOf("-") !== -1;
-				if (!m || (dash && m[3] === undefined && m[4] === undefined)) return `"${part}" isn't a range like S1E2-S1E4, S1E7 or S1E6-S2.`;
+				if (!m || (dash && m[3] === undefined && m[4] === undefined))
+					return `"${part}" isn't a range like S1E2-S1E4, S1E7 or S1E6-S2.`;
 				const season = Number(m[1]);
 				const episode = m[2] !== undefined ? Number(m[2]) : 1;
 				// "S1E6-S2": to the end of season 2; "S1E1-5": to episode 5 of season 1; "S1E7": just it; "S3": all of it
@@ -1693,11 +1893,16 @@ function init(): void {
 				if (dash) toEpisode = m[4] !== undefined ? Number(m[4]) : undefined;
 				else if (m[2] !== undefined) toEpisode = episode;
 				if (episode < 1 || (toEpisode !== undefined && toEpisode < 1)) return `"${part}": episodes start at 1.`;
-				const backwards = toSeason < season || (toSeason === season && toEpisode !== undefined && toEpisode < episode);
+				const backwards =
+					toSeason < season || (toSeason === season && toEpisode !== undefined && toEpisode < episode);
 				if (backwards) return `"${part}" ends before it starts.`;
 				const last = out[out.length - 1];
 				// After the previous range's end: TMDB's order, so no episode is used twice
-				if (last && (season < last.toSeason || (season === last.toSeason && (last.toEpisode === undefined || episode <= last.toEpisode))))
+				if (
+					last &&
+					(season < last.toSeason ||
+						(season === last.toSeason && (last.toEpisode === undefined || episode <= last.toEpisode)))
+				)
 					return `"${part}" comes before the end of the range before it: ranges go in TMDB's order and don't overlap.`;
 				out.push({ season, episode, toSeason, ...(toEpisode !== undefined ? { toEpisode } : {}) });
 			}
@@ -1708,8 +1913,11 @@ function init(): void {
 			ranges
 				.map((r) => {
 					const from = `S${r.season}E${r.episode}`;
-					if (r.toEpisode === undefined) return r.toSeason === r.season && r.episode === 1 ? `S${r.season}` : `${from}-S${r.toSeason}`;
-					return r.toSeason === r.season && r.toEpisode === r.episode ? from : `${from}-S${r.toSeason}E${r.toEpisode}`;
+					if (r.toEpisode === undefined)
+						return r.toSeason === r.season && r.episode === 1 ? `S${r.season}` : `${from}-S${r.toSeason}`;
+					return r.toSeason === r.season && r.toEpisode === r.episode
+						? from
+						: `${from}-S${r.toSeason}E${r.toEpisode}`;
 				})
 				.join(", ");
 		/** [1, 2, 3, 4, 6] -> "1-4, 6", or with a prefix ("S") before each number "S1-S4, S6" */
@@ -1736,7 +1944,8 @@ function init(): void {
 			const prefixed = value.trim().match(/^(-?\d+)\s*=\s*(.*)$/);
 			const start = prefixed ? Number(prefixed[1]) : 1;
 			const text = prefixed ? prefixed[2].trim() : value.trim();
-			const withOffset = (fields: TmdbEpisodes, offset: number) => (offset ? { ...fields, tmdbOffset: offset } : fields);
+			const withOffset = (fields: TmdbEpisodes, offset: number) =>
+				offset ? { ...fields, tmdbOffset: offset } : fields;
 			// One start ("S6E2", "S6"): a season and offset, as before ranges, so the episodes still stop at AniList's total
 			const single = text.match(/^S(\d+)(?:E(\d+))?$/i);
 			if (single) return withOffset({ tmdbSeason: Number(single[1]) }, Number(single[2] ?? 1) - start);
@@ -1749,14 +1958,22 @@ function init(): void {
 				return withOffset({ tmdbSeason: ranges[0].season, tmdbRanges: ranges }, 1 - start);
 			}
 			const seasons = parseSeasons(plain);
-			if (!seasons) return `"${value.trim()}" isn't a season (S2), seasons (S1-S4, S6), a start (S6E2) or ranges (S1E2-S1E4, S1E7).`;
-			return withOffset({ tmdbSeason: seasons[0], ...(seasons.length > 1 ? { tmdbSeasons: seasons } : {}) }, 1 - start);
+			if (!seasons)
+				return `"${value.trim()}" isn't a season (S2), seasons (S1-S4, S6), a start (S6E2) or ranges (S1E2-S1E4, S1E7).`;
+			return withOffset(
+				{ tmdbSeason: seasons[0], ...(seasons.length > 1 ? { tmdbSeasons: seasons } : {}) },
+				1 - start,
+			);
 		}
 		/** The TMDB Episodes field's text for a season, seasons or ranges and an offset (see parseTmdbEpisodes) */
 		function formatTmdbEpisodes(o: TmdbEpisodes) {
 			if (typeof o.tmdbSeason !== "number") return "";
 			const offset = o.tmdbOffset ?? 0;
-			const list = o.tmdbRanges?.length ? formatRanges(o.tmdbRanges) : o.tmdbSeasons?.length ? formatSeasons(o.tmdbSeasons, "S") : undefined;
+			const list = o.tmdbRanges?.length
+				? formatRanges(o.tmdbRanges)
+				: o.tmdbSeasons?.length
+					? formatSeasons(o.tmdbSeasons, "S")
+					: undefined;
 			// Several seasons or ranges count the offset along the run: the episode that lands on its first episode
 			if (list) return offset ? `${1 - offset}=${list}` : list;
 			if (offset < 0) return `${1 - offset}=S${o.tmdbSeason}E1`;
@@ -1774,7 +1991,11 @@ function init(): void {
 			if (!m || (!m[2] && !m[3]) || m[3] === "0" || (kind && ANIDB_LETTERS.indexOf(kind) === -1))
 				return `"${value.trim()}" isn't an AniDB episode like 13, or a lettered one (${ANIDB_LETTER_LIST}).`;
 			const offset = Number(m[3] || 1) - (m[1] ? Number(m[1]) : 1);
-			return { ...(offset ? { offset } : {}), ...(kind === "S" ? { specials: true } : {}), ...(kind && kind !== "S" ? { letter: kind } : {}) };
+			return {
+				...(offset ? { offset } : {}),
+				...(kind === "S" ? { specials: true } : {}),
+				...(kind && kind !== "S" ? { letter: kind } : {}),
+			};
 		}
 		/** The AniDB Episodes field's text (see parseAnidbEpisodes): empty for main episodes from 1 */
 		function formatAnidbEpisodes({ offset = 0, specials, letter }: AnidbEpisodes) {
@@ -1794,7 +2015,11 @@ function init(): void {
 		 * Override fields changed since they were saved (Auto-fill fills them without saving): a blue dot on that tab's Save.
 		 * Checked when a field changes, and after anything that fills or saves them; so are the fields that are off.
 		 */
-		const unsaved = ctx.state<{ media: boolean; episode: boolean; editor: boolean }>({ media: false, episode: false, editor: false });
+		const unsaved = ctx.state<{ media: boolean; episode: boolean; editor: boolean }>({
+			media: false,
+			episode: false,
+			editor: false,
+		});
 		function checkUnsaved() {
 			const media = currentMedia.get();
 			if (!media) return;
@@ -1803,16 +2028,20 @@ function init(): void {
 			const differs = (refs: Record<string, $ui.FieldRef<string>>, values: Record<string, string>) =>
 				Object.keys(values).some((k) => refs[k].current.trim() !== values[k]);
 			// The episode editor's fields against the custom metadata saved for the episode
-			const custom: Record<string, unknown> = (episode !== undefined && database.get(media.id).data[episode]) || {};
+			const custom: Record<string, unknown> =
+				(episode !== undefined && database.get(media.id).data[episode]) || {};
 			const customValues = Object.fromEntries(Object.keys(fieldRefs.data).map((k) => [k, `${custom[k] ?? ""}`]));
 			const episodeSaved = saved.episodeOverrides.find((e) => e.aniDBEpisode === episode) ?? {};
 			const next = {
 				editor: episode !== undefined && differs(fieldRefs.data, customValues),
 				media: differs(tmdb.overrides.media.fieldRefs, tmdb.overrides.media.values(saved)),
-				episode: episode !== undefined && differs(tmdb.overrides.episode.fieldRefs, tmdb.overrides.episode.values(episodeSaved)),
+				episode:
+					episode !== undefined &&
+					differs(tmdb.overrides.episode.fieldRefs, tmdb.overrides.episode.values(episodeSaved)),
 			};
 			const now = unsaved.get();
-			if (next.media !== now.media || next.episode !== now.episode || next.editor !== now.editor) unsaved.set(next);
+			if (next.media !== now.media || next.episode !== now.episode || next.editor !== now.editor)
+				unsaved.set(next);
 
 			// Fields that are off ("media.tmdbEpisodes"), and cleared as they turn off: a source's other fields once one of them
 			// says "none"; a movie's Episodes (an episode's Season and Episode), as it has no seasons, while the TMDB
@@ -1852,7 +2081,15 @@ function init(): void {
 		const deleteStyle = (has: boolean, which: string): Record<string, string> => {
 			if (has) return { display: "block" };
 			if (deletePressed.get()[which]) {
-				return { opacity: "0", pointerEvents: "none", width: "0", minWidth: "0", padding: "0", border: "0", overflow: "hidden" };
+				return {
+					opacity: "0",
+					pointerEvents: "none",
+					width: "0",
+					minWidth: "0",
+					padding: "0",
+					border: "0",
+					overflow: "hidden",
+				};
 			}
 			return { display: "none" };
 		};
@@ -1874,7 +2111,10 @@ function init(): void {
 					["S2", "season 2"],
 					["S1-S4, S6", "seasons 1 to 4 and 6, read as one run"],
 					["S6E2", "episode 1 is S6E2, the next ones follow"],
-					["S1E2-S1E4, S1E7", "these TMDB episodes in order, then every later one (S1E6-S2 to the end of season 2, S3 all of it)"],
+					[
+						"S1E2-S1E4, S1E7",
+						"these TMDB episodes in order, then every later one (S1E6-S2 to the end of season 2, S3 all of it)",
+					],
 					["S0E66-S0E68", "specials work the same"],
 				],
 			],
@@ -1897,27 +2137,36 @@ function init(): void {
 		];
 		/** The Media tab's description, with a link that opens what the fields take (a small modal, like the status lines') */
 		function mediaTabIntro() {
-			const code = (text: string) => tray.span(text, { className: "font-mono text-[--foreground] whitespace-nowrap" });
+			const code = (text: string) =>
+				tray.span(text, { className: "font-mono text-[--foreground] whitespace-nowrap" });
 			const rows = FIELD_HELP.map(([title, examples]) =>
 				tray.div(
 					[
 						tray.text(title, { className: "font-semibold" }),
 						...examples.map(([example, meaning]) =>
-							tray.flex([tray.div([code(example)], { className: "shrink-0 w-36" }), tray.span(meaning)], { gap: 2 }),
+							tray.flex([tray.div([code(example)], { className: "shrink-0 w-36" }), tray.span(meaning)], {
+								gap: 2,
+							}),
 						),
 					],
 					{ className: "space-y-1" },
 				),
 			);
 			const help = tray.modal({
-				trigger: tray.span(FIELD_HELP_LINK, { className: "cem-trigger cursor-pointer underline text-[--foreground]" }),
+				trigger: tray.span(FIELD_HELP_LINK, {
+					className: "cem-trigger cursor-pointer underline text-[--foreground]",
+				}),
 				title: "The Media tab's fields",
 				open: stepsOpen.get() === "help",
-				onOpenChange: ctx.eventHandler("steps-help", ({ open }: { open: boolean }) => stepsOpen.set(open ? "help" : "")),
+				onOpenChange: ctx.eventHandler("steps-help", ({ open }: { open: boolean }) =>
+					stepsOpen.set(open ? "help" : ""),
+				),
 				className: "max-w-xl",
 				items: [tray.div(rows, { className: "space-y-3 text-sm text-[--muted] break-normal" })],
 			});
-			return tray.div([tray.span(`${MEDIA_TAB_TEXT} `), help], { className: "cem-line text-sm text-[--muted] break-normal text-pretty" });
+			return tray.div([tray.span(`${MEDIA_TAB_TEXT} `), help], {
+				className: "cem-line text-sm text-[--muted] break-normal text-pretty",
+			});
 		}
 		const textLines = (text: string) => Math.max(1, Math.ceil(text.length / 95));
 		/** TMDB overrides modal. Pass the episode being edited, or null from the episode list. */
@@ -1934,7 +2183,12 @@ function init(): void {
 				tray.tabsContent({
 					value,
 					className: "mt-2 p-3 border rounded-xl",
-					items: [tray.div(items, { className: "flex flex-col gap-3", style: { minHeight: `${mediaHeight}rem` } })],
+					items: [
+						tray.div(items, {
+							className: "flex flex-col gap-3",
+							style: { minHeight: `${mediaHeight}rem` },
+						}),
+					],
 				});
 			const button = tray.button("Overrides", {
 				intent: "white",
@@ -1961,7 +2215,9 @@ function init(): void {
 						items: [
 							tray.tabsList({
 								items: [
-									...(episode !== null ? [tray.tabsTrigger(tray.text("Episode"), { value: "episode" })] : []),
+									...(episode !== null
+										? [tray.tabsTrigger(tray.text("Episode"), { value: "episode" })]
+										: []),
 									tray.tabsTrigger(tray.text("Media"), { value: "media" }),
 									tray.tabsTrigger(tray.text("Bulk Update"), { value: "bulk-update" }),
 								],
@@ -1977,9 +2233,12 @@ function init(): void {
 				footer: [
 					tray.div(
 						[
-							tray.text("TMDB ID can be found on the TMDB link of the series in the format of: /tv/{tmdbId} or /movie/{tmdbId}.", {
-							className: "break-normal",
-						}),
+							tray.text(
+								"TMDB ID can be found on the TMDB link of the series in the format of: /tv/{tmdbId} or /movie/{tmdbId}.",
+								{
+									className: "break-normal",
+								},
+							),
 							tray.text("Prefix the ID with s or m to set its type.", { className: "break-normal" }),
 						],
 						{ className: "w-full text-left text-[--muted] text-xs" },
@@ -2014,11 +2273,24 @@ function init(): void {
 			// Only matches in use: an automatic one switched off stays stored but isn't shown
 			const auto = tmdbOn() && record?.status === "matched" && record.source !== "override" ? record : undefined;
 			const out: Record<
-				"tmdbId" | "tmdbEpisodes" | "anidbId" | "anidbEpisodes" | "epTmdbId" | "epSeason" | "epEpisode" | "epAnidbEpisode",
+				| "tmdbId"
+				| "tmdbEpisodes"
+				| "anidbId"
+				| "anidbEpisodes"
+				| "epTmdbId"
+				| "epSeason"
+				| "epEpisode"
+				| "epAnidbEpisode",
 				string
 			> = {
-				tmdbId: "", tmdbEpisodes: "", anidbId: "", anidbEpisodes: "",
-				epTmdbId: "", epSeason: "", epEpisode: "", epAnidbEpisode: "",
+				tmdbId: "",
+				tmdbEpisodes: "",
+				anidbId: "",
+				anidbEpisodes: "",
+				epTmdbId: "",
+				epSeason: "",
+				epEpisode: "",
+				epAnidbEpisode: "",
 			};
 			if (auto?.tmdbId) {
 				out.tmdbId = formatTmdbId(auto.tmdbId, auto.tmdbType ?? "tv");
@@ -2028,14 +2300,25 @@ function init(): void {
 					const later = r.season > before.season || (r.season === before.season && r.first > before.last);
 					return r.from === before.to + 1 && r.tmdbId === auto.tmdbId && later;
 				};
-				const ordered = runs.length > 1 && runs[0].from === 1 && runs.every((r, i) => i === 0 || follows(r, runs[i - 1]));
+				const ordered =
+					runs.length > 1 && runs[0].from === 1 && runs.every((r, i) => i === 0 || follows(r, runs[i - 1]));
 				if (ordered) {
-					out.tmdbEpisodes = formatRanges(runs.map((r) => ({ season: r.season, episode: r.first, toSeason: r.season, toEpisode: r.last })));
+					out.tmdbEpisodes = formatRanges(
+						runs.map((r) => ({
+							season: r.season,
+							episode: r.first,
+							toSeason: r.season,
+							toEpisode: r.last,
+						})),
+					);
 				}
 				// Parts with gaps or out of order: no Episodes value says that, only the automatic match keeps them
 				else if (runs.length > 1) out.tmdbEpisodes = `${runs.length} parts, kept while this is empty`;
 				else if (auto.fallback && auto.tmdbType !== "movie") {
-					out.tmdbEpisodes = formatTmdbEpisodes({ tmdbSeason: auto.fallback.season, tmdbOffset: auto.fallback.offset });
+					out.tmdbEpisodes = formatTmdbEpisodes({
+						tmdbSeason: auto.fallback.season,
+						tmdbOffset: auto.fallback.offset,
+					});
 				}
 			}
 			const match = anidbStore.get(mediaId);
@@ -2058,15 +2341,24 @@ function init(): void {
 		}
 
 		/** The Episode tab: this episode's own TMDB and AniDB episode */
-		function episodePane(pane: Pane, media: ShownMedia, episode: string, auto: ReturnType<typeof autoPlaceholders>) {
+		function episodePane(
+			pane: Pane,
+			media: ShownMedia,
+			episode: string,
+			auto: ReturnType<typeof autoPlaceholders>,
+		) {
 			const refs = tmdb.overrides.episode.fieldRefs;
 			return pane("episode", [
 				tray.text(
 					"Applies to this episode only, over the media override and any range. Enter m<id> to make it a TMDB movie. " +
-						"AniDB Episode takes a number or a lettered one (S3, C1, O5). Enter \"none\" to leave TMDB or AniDB out.",
+						'AniDB Episode takes a number or a lettered one (S3, C1, O5). Enter "none" to leave TMDB or AniDB out.',
 					{ className: "text-sm text-[--muted] break-normal text-pretty" },
 				),
-				styledInput("TMDB ID", { fieldRef: refs.tmdbId, disabled: !tmdb.API_KEY || isOff("episode.tmdbId"), placeholder: auto.epTmdbId }),
+				styledInput("TMDB ID", {
+					fieldRef: refs.tmdbId,
+					disabled: !tmdb.API_KEY || isOff("episode.tmdbId"),
+					placeholder: auto.epTmdbId,
+				}),
 				styledInput("TMDB Season", {
 					fieldRef: refs.tmdbSeason,
 					disabled: !tmdb.API_KEY || isOff("episode.tmdbSeason"),
@@ -2077,7 +2369,11 @@ function init(): void {
 					disabled: !tmdb.API_KEY || isOff("episode.tmdbEpisode"),
 					placeholder: auto.epEpisode,
 				}),
-				styledInput("AniDB ID", { fieldRef: refs.anidbId, disabled: isOff("episode.anidbId"), placeholder: auto.anidbId }),
+				styledInput("AniDB ID", {
+					fieldRef: refs.anidbId,
+					disabled: isOff("episode.anidbId"),
+					placeholder: auto.anidbId,
+				}),
 				styledInput("AniDB Episode", {
 					fieldRef: refs.anidbEpisode,
 					disabled: isOff("episode.anidbEpisode"),
@@ -2090,7 +2386,9 @@ function init(): void {
 							intent: "alert",
 							size: "md",
 							style: deleteStyle(tmdb.overrides.hasEpisode(media.id, episode), "episode"),
-							onClick: ctx.eventHandler(`modal-del-${media.id}-${episode}`, () => deleteEpisodeOverride(media.id, episode)),
+							onClick: ctx.eventHandler(`modal-del-${media.id}-${episode}`, () =>
+								deleteEpisodeOverride(media.id, episode),
+							),
 						}),
 						withDot(
 							tray.button("Save", {
@@ -2111,7 +2409,8 @@ function init(): void {
 
 		function deleteEpisodeOverride(mediaId: number, episode: string) {
 			deletePressed.set({ ...deletePressed.get(), episode: true });
-			if (!tmdb.overrides.hasEpisode(mediaId, episode)) return ctx.toast.info("This episode has no overrides to delete.");
+			if (!tmdb.overrides.hasEpisode(mediaId, episode))
+				return ctx.toast.info("This episode has no overrides to delete.");
 			const isDeleted = tmdb.overrides.removeEpisodeOverride(mediaId, episode);
 			rematch(mediaId);
 			scheduleRebuild(false);
@@ -2130,7 +2429,9 @@ function init(): void {
 				return ctx.toast.error((e as Error).message);
 			}
 			// As saved: a "none" typed in any of a source's fields shows in its ID field
-			tmdb.overrides.episode.fill(tmdb.overrides.get(mediaId).episodeOverrides.find((o) => o.aniDBEpisode === episode) ?? {});
+			tmdb.overrides.episode.fill(
+				tmdb.overrides.get(mediaId).episodeOverrides.find((o) => o.aniDBEpisode === episode) ?? {},
+			);
 			rematch(mediaId);
 			// Its AniDB episode shows once the modal closes (see rebuild)
 			scheduleRebuild(false);
@@ -2140,14 +2441,24 @@ function init(): void {
 		}
 
 		/** The Media tab: the anime's TMDB match and AniDB ID, how each was found, and the buttons that redo them */
-		function mediaPane(pane: Pane, media: ShownMedia, auto: ReturnType<typeof autoPlaceholders>, tmdbLine: Status, anidbLine: Status) {
+		function mediaPane(
+			pane: Pane,
+			media: ShownMedia,
+			auto: ReturnType<typeof autoPlaceholders>,
+			tmdbLine: Status,
+			anidbLine: Status,
+		) {
 			const refs = tmdb.overrides.media.fieldRefs;
 			let refreshTip = "Look up the AniDB ID again";
 			if (tmdbOn()) refreshTip = anidbLookup() ? "Match TMDB and AniDB again" : "Match TMDB again";
 			return pane("media", [
 				mediaTabIntro(),
 				statusLine("tmdb", tmdbLine),
-				styledInput("TMDB ID", { fieldRef: refs.tmdbId, disabled: !tmdb.API_KEY || isOff("media.tmdbId"), placeholder: auto.tmdbId }),
+				styledInput("TMDB ID", {
+					fieldRef: refs.tmdbId,
+					disabled: !tmdb.API_KEY || isOff("media.tmdbId"),
+					placeholder: auto.tmdbId,
+				}),
 				styledInput("TMDB Episodes", {
 					fieldRef: refs.tmdbEpisodes,
 					disabled: !tmdb.API_KEY || isOff("media.tmdbEpisodes"),
@@ -2155,7 +2466,11 @@ function init(): void {
 				}),
 				statusLine("anidb", anidbLine),
 				// Real AniDB ID for anime Seanime has no metadata for: clears its "metadata retrieval not available" notice
-				styledInput("AniDB ID", { fieldRef: refs.anidbId, disabled: isOff("media.anidbId"), placeholder: auto.anidbId }),
+				styledInput("AniDB ID", {
+					fieldRef: refs.anidbId,
+					disabled: isOff("media.anidbId"),
+					placeholder: auto.anidbId,
+				}),
 				styledInput("AniDB Episodes", {
 					fieldRef: refs.anidbEpisodes,
 					disabled: isOff("media.anidbEpisodes"),
@@ -2256,7 +2571,8 @@ function init(): void {
 
 		function deleteMediaOverride(mediaId: number) {
 			deletePressed.set({ ...deletePressed.get(), media: true });
-			if (!hasMediaOverride(tmdb.overrides.get(mediaId))) return ctx.toast.info("This media has no overrides to delete.");
+			if (!hasMediaOverride(tmdb.overrides.get(mediaId)))
+				return ctx.toast.info("This media has no overrides to delete.");
 			log.mark(`Media override deleted: ${mediaId}`);
 			tmdb.overrides.removeMediaOverride(mediaId);
 			rematch(mediaId);
@@ -2273,7 +2589,15 @@ function init(): void {
 			const mediaFields = () => {
 				const o = tmdb.overrides.get(mediaId);
 				const tmdbPart = [o.tmdbId, o.tmdbType, o.tmdbSeason, o.tmdbSeasons, o.tmdbRanges, o.tmdbOffset];
-				return stableJson([...tmdbPart, o.anidbId, o.anidbOffset, o.anidbSpecials, o.anidbLetter, o.tmdbNone, o.anidbNone]);
+				return stableJson([
+					...tmdbPart,
+					o.anidbId,
+					o.anidbOffset,
+					o.anidbSpecials,
+					o.anidbLetter,
+					o.tmdbNone,
+					o.anidbNone,
+				]);
 			};
 			const before = mediaFields();
 			try {
@@ -2360,13 +2684,17 @@ function init(): void {
 					if (tmdb.API_KEY) ctx.toast.info(anidbFound);
 				} else {
 					log.step(`${mediaId}: Auto-fill found no verified AniDB ID: ${found.reason}`);
-					if (!tmdb.API_KEY) return ctx.toast.error(`No verified AniDB ID found: ${found.reason}. Enter it by hand.`);
+					if (!tmdb.API_KEY)
+						return ctx.toast.error(`No verified AniDB ID found: ${found.reason}. Enter it by hand.`);
 				}
 			}
 			// Without a TMDB token only the AniDB ID is filled
 			if (!tmdb.API_KEY || none.tmdb) {
 				if (anidbFound) return ctx.toast.success(`Filled ${anidbFound} Review it and press Save.`);
-				if (none.tmdb) return ctx.toast.info("TMDB is set to none and the AniDB ID field is filled in: nothing to look up.");
+				if (none.tmdb)
+					return ctx.toast.info(
+						"TMDB is set to none and the AniDB ID field is filled in: nothing to look up.",
+					);
 				return ctx.toast.info("The AniDB ID field is already filled in: nothing to look up.");
 			}
 
@@ -2376,7 +2704,8 @@ function init(): void {
 
 			if (!found) {
 				if (!firstValid) {
-					if (typed) return ctx.toast.error(`TMDB has no ${typed.type ?? "show or movie"} with ID ${typed.id}.`);
+					if (typed)
+						return ctx.toast.error(`TMDB has no ${typed.type ?? "show or movie"} with ID ${typed.id}.`);
 					return ctx.toast.error("Couldn't find this anime on TMDB. Enter the TMDB ID by hand.");
 				}
 				refs.tmdbId.setValue(formatTmdbId(firstValid.id, firstValid.type));
@@ -2402,7 +2731,9 @@ function init(): void {
 				const session = tmdbSession();
 				await session.prefetch(id, seasons);
 				const run = await seasonRun(session, id, seasons);
-				const start = run.findIndex((r) => r.season === first.season && r.episode === first.from + first.offset);
+				const start = run.findIndex(
+					(r) => r.season === first.season && r.episode === first.from + first.offset,
+				);
 				const offset = start + 1 - first.from;
 				const checked = Object.entries(mapping.map).filter(
 					([k, t]) => /^\d+$/.test(k) && t.season !== undefined && seasons.indexOf(t.season) !== -1,
@@ -2429,7 +2760,9 @@ function init(): void {
 				);
 			}
 			refs.tmdbEpisodes.setValue(formatTmdbEpisodes({ tmdbSeason: first.season, tmdbOffset: first.offset }));
-			ctx.toast.success(`Filled TMDB ${id} from ${from}: ${landsOn(first.season, first.offset)}. Review it and press Save.`);
+			ctx.toast.success(
+				`Filled TMDB ${id} from ${from}: ${landsOn(first.season, first.offset)}. Review it and press Save.`,
+			);
 		}
 
 		/**
@@ -2438,7 +2771,8 @@ function init(): void {
 		 */
 		function seasonListText(seasons: number[], offset: number, run: { season: number; episode: number }[]) {
 			const at = run[offset];
-			if (offset <= 0 || !at) return formatTmdbEpisodes({ tmdbSeason: seasons[0], tmdbSeasons: seasons, tmdbOffset: offset });
+			if (offset <= 0 || !at)
+				return formatTmdbEpisodes({ tmdbSeason: seasons[0], tmdbSeasons: seasons, tmdbOffset: offset });
 			// Runs of consecutive seasons from the one episode 1 lands in: "S1E4-S4", then "S6" or "S8-S9"
 			const groups: number[][] = [];
 			for (const season of seasons.slice(seasons.indexOf(at.season))) {
@@ -2465,9 +2799,19 @@ function init(): void {
 				"Writes AniDB's data for every episode into your custom metadata, from the AniDB ID: titles, lengths, summaries and " +
 				"air dates. Only for editing episodes by hand.";
 			return pane("bulk-update", [
-				tray.text(tmdb.API_KEY ? fromBoth : fromAnidb, { className: "text-sm text-[--muted] text-pretty break-normal" }),
-				tray.alert({ intent: "warning", description: "This replaces the custom metadata you saved for this anime's episodes." }),
-				actionButton(`bulk-update-${media.id}`, "Bulk Update", { intent: "success-subtle", className: "w-full" }, () => bulkUpdate(media)),
+				tray.text(tmdb.API_KEY ? fromBoth : fromAnidb, {
+					className: "text-sm text-[--muted] text-pretty break-normal",
+				}),
+				tray.alert({
+					intent: "warning",
+					description: "This replaces the custom metadata you saved for this anime's episodes.",
+				}),
+				actionButton(
+					`bulk-update-${media.id}`,
+					"Bulk Update",
+					{ intent: "success-subtle", className: "w-full" },
+					() => bulkUpdate(media),
+				),
 				progressLine("bulk-update-"),
 			]);
 		}
@@ -2488,8 +2832,10 @@ function init(): void {
 					log.error(`${media.id}: Bulk Update failed:`, error);
 					return ctx.toast.error((error as Error).message);
 				}
-				if (result.record?.status === "failed") return ctx.toast.error(result.record.reason ?? "Unable to match this anime on TMDB.");
-				if (result.missing.length) ctx.toast.warning(`No TMDB episode found for episode(s) ${result.missing.join(", ")}`);
+				if (result.record?.status === "failed")
+					return ctx.toast.error(result.record.reason ?? "Unable to match this anime on TMDB.");
+				if (result.missing.length)
+					ctx.toast.warning(`No TMDB episode found for episode(s) ${result.missing.join(", ")}`);
 			}
 			const fromAnidb = await bulkFromAnidb(media.id, result?.written ?? []);
 			log.timeEnd(`bulk ${media.id}`);
@@ -2497,7 +2843,9 @@ function init(): void {
 			if (!saved) {
 				const tmdbHint = tmdb.API_KEY ? "a TMDB ID and Episodes or " : "";
 				if (fromTmdb) return ctx.toast.error("Neither TMDB nor AniDB has episodes for this anime yet.");
-				return ctx.toast.error(`Nothing to write: save ${tmdbHint}an AniDB ID in the Media tab first (Auto-fill can find them).`);
+				return ctx.toast.error(
+					`Nothing to write: save ${tmdbHint}an AniDB ID in the Media tab first (Auto-fill can find them).`,
+				);
 			}
 			const sources = [result?.saved ? "TMDB" : "", fromAnidb.used ? "AniDB" : ""].filter(Boolean).join(" and ");
 
@@ -2514,17 +2862,23 @@ function init(): void {
 		 * many episodes TMDB hadn't written (added), and how many AniDB wrote anything in (used).
 		 */
 		async function bulkFromAnidb(mediaId: number, written: string[]) {
-			if (await needsAnidb(mediaId)) await refreshAnidb(mediaId).catch((e) => log.debug(`${mediaId}: AniDB lookup for Bulk Update failed:`, e));
+			if (await needsAnidb(mediaId))
+				await refreshAnidb(mediaId).catch((e) =>
+					log.debug(`${mediaId}: AniDB lookup for Bulk Update failed:`, e),
+				);
 			let added = 0;
 			let used = 0;
 			for (const [key, ep] of Object.entries(anidbEpisodes(mediaId))) {
 				const tmdbs = written.indexOf(key) !== -1;
-				const update: CEM.CustomEpisodeMetadata = tmdbs ? { ...database.get(mediaId).data[key] } : { episode: key };
+				const update: CEM.CustomEpisodeMetadata = tmdbs
+					? { ...database.get(mediaId).data[key] }
+					: { episode: key };
 				if (ep.title && !update.title && plainTitle(ep.title)) update.title = ep.title;
 				if (ep.length && update.length === undefined) update.length = ep.length;
 				if (ep.summary && !update.overview) update.overview = ep.summary;
 				if (ep.airDate) update.airDate = ep.airDate;
-				if (stableJson(update) === stableJson(tmdbs ? database.get(mediaId).data[key] : { episode: key })) continue;
+				if (stableJson(update) === stableJson(tmdbs ? database.get(mediaId).data[key] : { episode: key }))
+					continue;
 				database.save(mediaId, update);
 				used++;
 				if (!tmdbs) added++;
@@ -2539,7 +2893,9 @@ function init(): void {
 			const override = tmdb.overrides.get(mediaId);
 			const wanted = override.anidbId ? match?.aid === override.anidbId : anidbLookup();
 			const inUse = match && match.status !== "none" && !override.anidbNone && wanted;
-			const out: Record<string, { title?: string; airDate?: string; length?: number; summary?: string }> = { ...(inUse ? match.episodes : {}) };
+			const out: Record<string, { title?: string; airDate?: string; length?: number; summary?: string }> = {
+				...(inUse ? match.episodes : {}),
+			};
 			for (const o of override.episodeOverrides) {
 				if (o.aniDBEpisode && o.anidb) out[o.aniDBEpisode] = o.anidb;
 				if (o.aniDBEpisode && o.anidbNone) delete out[o.aniDBEpisode];
@@ -2552,7 +2908,12 @@ function init(): void {
 		/** A status line's state, by its blip's colour (the design system's signals): found, failed, off (can't be looked up), pending */
 		type LineState = "found" | "failed" | "off" | "pending";
 		type Status = { text: string; state: LineState; title: string; steps: string[] };
-		const BLIP: Record<LineState, string> = { found: "bg-green-500", failed: "bg-orange-500", off: "bg-red-500", pending: "bg-blue-500" };
+		const BLIP: Record<LineState, string> = {
+			found: "bg-green-500",
+			failed: "bg-orange-500",
+			off: "bg-red-500",
+			pending: "bg-blue-500",
+		};
 		/**
 		 * A status line of the Media tab, its lead ("TMDB ID", "AniDB ID") in bold. A pinging status blip like the Overrides
 		 * button's dot comes first, coloured by its state (the text says the same), and clicking it or the lead opens the
@@ -2577,8 +2938,12 @@ function init(): void {
 				{
 					className: `rounded-full ${color}`,
 					style: {
-						display: "inline-block", position: "relative", width: "0.5rem", height: "0.5rem",
-						marginRight: "0.375rem", verticalAlign: "0.0625rem",
+						display: "inline-block",
+						position: "relative",
+						width: "0.5rem",
+						height: "0.5rem",
+						marginRight: "0.375rem",
+						verticalAlign: "0.0625rem",
 					},
 				},
 			);
@@ -2587,16 +2952,27 @@ function init(): void {
 				trigger,
 				title: status.title,
 				open: stepsOpen.get() === which,
-				onOpenChange: ctx.eventHandler(`steps-${which}`, ({ open }: { open: boolean }) => stepsOpen.set(open ? which : "")),
+				onOpenChange: ctx.eventHandler(`steps-${which}`, ({ open }: { open: boolean }) =>
+					stepsOpen.set(open ? which : ""),
+				),
 				className: "max-w-xl",
 				items: [
 					tray.div(
 						status.steps.map((step, i) =>
-							tray.flex([tray.span(`${i + 1}.`, { className: "shrink-0 w-6 text-right text-[--muted]" }), tray.span(step)], { gap: 2 }),
+							tray.flex(
+								[
+									tray.span(`${i + 1}.`, { className: "shrink-0 w-6 text-right text-[--muted]" }),
+									tray.span(step),
+								],
+								{ gap: 2 },
+							),
 						),
 						// Its own scroll, the space for the scrollbar kept: a long list neither grows the modal past the screen
 						// nor rewraps when the scrollbar appears
-						{ className: "space-y-1.5 text-sm break-normal", style: { maxHeight: "60vh", overflowY: "auto", scrollbarGutter: "stable" } },
+						{
+							className: "space-y-1.5 text-sm break-normal",
+							style: { maxHeight: "60vh", overflowY: "auto", scrollbarGutter: "stable" },
+						},
 					),
 				],
 			});
@@ -2630,27 +3006,43 @@ function init(): void {
 				]);
 			const overridden = tmdbOverridden(mediaId);
 			if (!wantsMatch(mediaId))
-				return off(overridden ? "your override, used once stills or fill-in are on" : "stills and fill-in are off", [
-					"TMDB stills and fill-in are both off in the plugin settings: nothing is matched, and a match from before isn't used",
-					"Auto-fill still finds the TMDB ID, season and offset to save here; Bulk Update writes TMDB's data from them",
-				]);
+				return off(
+					overridden ? "your override, used once stills or fill-in are on" : "stills and fill-in are off",
+					[
+						"TMDB stills and fill-in are both off in the plugin settings: nothing is matched, and a match from before isn't used",
+						"Auto-fill still finds the TMDB ID, season and offset to save here; Bulk Update writes TMDB's data from them",
+					],
+				);
 			if (!record)
 				return {
 					text: "TMDB ID: not matched yet.",
 					state: "pending",
 					title: "When the TMDB match is made",
-					steps: ["Matched when Seanime loads this anime (its page, or the watching list)", "Press Refresh to match it now"],
+					steps: [
+						"Matched when Seanime loads this anime (its page, or the watching list)",
+						"Press Refresh to match it now",
+					],
 				};
 			// A match stored before steps were kept: its outcome, until a refresh records the rest
 			const fromId = `TMDB${record.tmdbId ? ` ${record.tmdbId}` : ""} from ${record.idFrom ?? "Animap"}`;
 			const steps = record.steps ?? [`${fromId}: ${outcome(record as Mapping)}`, OLDER_MATCH];
 			if (record.status === "failed") {
-				return { text: `TMDB ID: no match: ${record.reason ?? "unknown error"}`, state: "failed", title: "Why the TMDB match failed", steps };
+				return {
+					text: `TMDB ID: no match: ${record.reason ?? "unknown error"}`,
+					state: "failed",
+					title: "Why the TMDB match failed",
+					steps,
+				};
 			}
 			// Parts the status line leaves out: all of them, as the last step
 			const runs = episodeRuns(record);
 			const parts = runs.length > 3 ? [`Its ${runs.length} parts: ${runs.map(runText).join("; ")}`] : [];
-			return { text: matchText(record), state: "found", title: "How the TMDB match was found", steps: steps.concat(parts) };
+			return {
+				text: matchText(record),
+				state: "found",
+				title: "How the TMDB match was found",
+				steps: steps.concat(parts),
+			};
 		}
 		/** One part of a match: this anime's episodes and the TMDB episodes they're on, "25-48 S2E1-24" */
 		function runText(r: ReturnType<typeof episodeRuns>[number]) {
@@ -2659,7 +3051,10 @@ function init(): void {
 		}
 		/** One line describing a TMDB match */
 		function matchText(record: CEM.ThumbnailRecord) {
-			const via = record.source === "override" ? "from the overrides" : `${matchedBy(record)}, ID from ${record.idFrom ?? "Animap"}`;
+			const via =
+				record.source === "override"
+					? "from the overrides"
+					: `${matchedBy(record)}, ID from ${record.idFrom ?? "Animap"}`;
 			if (record.tmdbType === "movie") return `TMDB ID: movie ${record.tmdbId}, ${via}.`;
 			const fallback = record.fallback;
 			const seasons = fallback?.seasons;
@@ -2674,13 +3069,19 @@ function init(): void {
 			let where = "";
 			if (runs.length > 1) {
 				// Long shows (Doraemon's 31 parts): the first two and the last, every part in the steps (see runsText)
-				const shown = runs.length > 3 ? [...runs.slice(0, 2).map(runText), "…", runText(runs[runs.length - 1])] : runs.map(runText);
+				const shown =
+					runs.length > 3
+						? [...runs.slice(0, 2).map(runText), "…", runText(runs[runs.length - 1])]
+						: runs.map(runText);
 				where = `, ${runs.length} parts: ${shown.join("; ")}`;
 			} else if (fallback) where = `, ${seasonText}`;
 			// Stills of main episodes and of specials (S1, S2: Animap's specials, OVAs and the like)
 			const keys = Object.keys(record.images);
 			const main = keys.filter((k) => /^\d+$/.test(k)).length;
-			const stills = keys.length === main ? `${main} stills` : `${keys.length} stills (${main} episodes, ${keys.length - main} specials)`;
+			const stills =
+				keys.length === main
+					? `${main} stills`
+					: `${keys.length} stills (${main} episodes, ${keys.length - main} specials)`;
 			return `TMDB ID: show ${record.tmdbId}${where}, ${via}. ${stills}.`;
 		}
 		/** What a TMDB match lined up by */
@@ -2692,7 +3093,8 @@ function init(): void {
 		}
 		/** The main episodes' TMDB targets as runs: consecutive episodes on the same TMDB season, one after the other. */
 		function episodeRuns(record: { map: Record<string, CEM.TMDBTarget> }) {
-			const runs: { from: number; to: number; season: number; first: number; last: number; tmdbId: number }[] = [];
+			const runs: { from: number; to: number; season: number; first: number; last: number; tmdbId: number }[] =
+				[];
 			const keys = Object.keys(record.map)
 				.filter((k) => /^\d+$/.test(k))
 				.map(Number)
@@ -2701,19 +3103,42 @@ function init(): void {
 				const t = record.map[`${n}`];
 				if (t?.season === undefined || t.episode === undefined) continue;
 				const run = runs[runs.length - 1];
-				if (run && run.to === n - 1 && run.season === t.season && run.tmdbId === t.tmdbId && run.last === t.episode - 1) {
+				if (
+					run &&
+					run.to === n - 1 &&
+					run.season === t.season &&
+					run.tmdbId === t.tmdbId &&
+					run.last === t.episode - 1
+				) {
 					run.to = n;
 					run.last = t.episode;
-				} else runs.push({ from: n, to: n, season: t.season, first: t.episode, last: t.episode, tmdbId: t.tmdbId });
+				} else
+					runs.push({
+						from: n,
+						to: n,
+						season: t.season,
+						first: t.episode,
+						last: t.episode,
+						tmdbId: t.tmdbId,
+					});
 			}
 			return runs;
 		}
 		/** Where the AniDB ID Seanime uses for this anime comes from, for the Media tab, with the lookup's steps when it's one's result. */
 		function anidbStatus(mediaId: number): Status {
-			const found = (text: string, steps: string[]): Status => ({ text, state: "found", title: "How the AniDB ID was found", steps });
+			const found = (text: string, steps: string[]): Status => ({
+				text,
+				state: "found",
+				title: "How the AniDB ID was found",
+				steps,
+			});
 			const override = tmdb.overrides.get(mediaId).anidbId;
 			if (override) {
-				const { anidbOffset: offset, anidbSpecials: specials, anidbLetter: letter } = tmdb.overrides.get(mediaId);
+				const {
+					anidbOffset: offset,
+					anidbSpecials: specials,
+					anidbLetter: letter,
+				} = tmdb.overrides.get(mediaId);
 				const where = formatAnidbEpisodes({ offset, specials, letter });
 				const from = where ? `, episodes ${where}` : "";
 				return found(`AniDB ID: ${override}, your override.`, [
@@ -2744,7 +3169,9 @@ function init(): void {
 					text: "AniDB ID: not looked up for custom entries",
 					state: "off",
 					title: "Why no AniDB ID has been looked up",
-					steps: ["Custom sources provide their own metadata: nothing is looked up, only an AniDB ID entered here is used"],
+					steps: [
+						"Custom sources provide their own metadata: nothing is looked up, only an AniDB ID entered here is used",
+					],
 				};
 			if (!anidbLookup())
 				return {
@@ -2758,11 +3185,15 @@ function init(): void {
 				};
 			if (match?.status === "verified") {
 				let at = match.specials ? ", its specials" : "";
-				if (match.offset) at = `, from its episode ${match.offset + 1}${match.specials ? " of the specials" : ""}`;
+				if (match.offset)
+					at = `, from its episode ${match.offset + 1}${match.specials ? " of the specials" : ""}`;
 				return found(
 					`AniDB ID: ${match.aid}${at}, found through ${match.from ?? "a lookup"} ` +
 						`and checked against AniDB: ${match.reason ?? "air dates line up"}.`,
-					match.steps ?? [`${match.from ?? "A lookup"}: AniDB ${match.aid} fits: ${match.reason ?? "air dates line up"}`, OLDER_MATCH],
+					match.steps ?? [
+						`${match.from ?? "A lookup"}: AniDB ${match.aid} fits: ${match.reason ?? "air dates line up"}`,
+						OLDER_MATCH,
+					],
 				);
 			}
 			if (match?.status === "none")
@@ -2791,7 +3222,8 @@ function init(): void {
 			const out: ("TMDB" | "AniDB")[] = [];
 			if (tmdb.overrides.get(mediaId).ignoreWarnings) return out;
 			const record = thumbnails.get(mediaId);
-			if (record?.status === "failed" && wantsMatch(mediaId) && !tmdb.overrides.get(mediaId).tmdbNone) out.push("TMDB");
+			if (record?.status === "failed" && wantsMatch(mediaId) && !tmdb.overrides.get(mediaId).tmdbNone)
+				out.push("TMDB");
 			const seanime = $store.get(`CEM_SEANIME_ANIDB_${mediaId}`);
 			const match = anidbStore.get(mediaId);
 			// The lookup only runs for anime Seanime has no AniDB ID for; one Seanime has since got isn't missing
@@ -2842,11 +3274,14 @@ function init(): void {
 				if (!shown[key])
 					shown[key] = (
 						type === "tv"
-							? tmdb.__fetch__<Record<string, unknown>>(`tv/${tmdbId}?append_to_response=season/1`).then((res) => {
-									const first = res["season/1"] as CEM.TMDBSeasonResults | undefined;
-									if (first?.episodes && !seasons[`${tmdbId}:1`]) seasons[`${tmdbId}:1`] = Promise.resolve(first);
-									return res as unknown as CEM.TMDBTVShowDetails;
-								})
+							? tmdb
+									.__fetch__<Record<string, unknown>>(`tv/${tmdbId}?append_to_response=season/1`)
+									.then((res) => {
+										const first = res["season/1"] as CEM.TMDBSeasonResults | undefined;
+										if (first?.episodes && !seasons[`${tmdbId}:1`])
+											seasons[`${tmdbId}:1`] = Promise.resolve(first);
+										return res as unknown as CEM.TMDBTVShowDetails;
+									})
 							: tmdb.getDetails(tmdbId, type)
 					).catch((e) => {
 						delete shown[key];
@@ -2876,12 +3311,18 @@ function init(): void {
 					if (target.movie) {
 						const m = await details(target.tmdbId, "movie");
 						return {
-							episode_number: 1, name: m.title, overview: m.overview,
-							air_date: m.release_date, runtime: m.runtime, still_path: m.backdrop_path,
+							episode_number: 1,
+							name: m.title,
+							overview: m.overview,
+							air_date: m.release_date,
+							runtime: m.runtime,
+							still_path: m.backdrop_path,
 						} as TMDBEpisode;
 					}
 					if (target.season === undefined || target.episode === undefined) return undefined;
-					return (await season(target.tmdbId, target.season)).episodes.find((e) => e.episode_number === target.episode);
+					return (await season(target.tmdbId, target.season)).episodes.find(
+						(e) => e.episode_number === target.episode,
+					);
 				} catch {
 					return undefined;
 				}
@@ -2917,7 +3358,8 @@ function init(): void {
 				.sort((a, b) => a - b);
 			await session.prefetch(tmdbId, seasons);
 			const run = await seasonRun(session, tmdbId, seasons);
-			const at = (season: number, episode: number) => run.findIndex((r) => r.season === season && r.episode === episode);
+			const at = (season: number, episode: number) =>
+				run.findIndex((r) => r.season === season && r.episode === episode);
 			const runSeasons = run.map((r) => r.season);
 			const picked: typeof run = [];
 			let end = -1;
@@ -2935,7 +3377,11 @@ function init(): void {
 		}
 
 		/** Episode overrides always win, over any match: their own show or movie, else the anime's (id) */
-		function overrideEpisodes(override: CEM.TMDBOverrides, into: Record<string, CEM.TMDBTarget>, id: number | undefined) {
+		function overrideEpisodes(
+			override: CEM.TMDBOverrides,
+			into: Record<string, CEM.TMDBTarget>,
+			id: number | undefined,
+		) {
 			for (const o of override.episodeOverrides) {
 				if (!o.aniDBEpisode || !tmdbFields(o)) continue;
 				if (o.tmdbType === "movie" && o.tmdbId) {
@@ -2947,7 +3393,8 @@ function init(): void {
 				const season = o.tmdbSeason ?? base?.season;
 				const episode = o.tmdbEpisode ?? base?.episode ?? (number ? parseInt(number[0], 10) : undefined);
 				const target = o.tmdbId ?? id;
-				if (target && season !== undefined && episode !== undefined) into[o.aniDBEpisode] = { tmdbId: target, season, episode };
+				if (target && season !== undefined && episode !== undefined)
+					into[o.aniDBEpisode] = { tmdbId: target, season, episode };
 			}
 			return into;
 		}
@@ -2988,14 +3435,25 @@ function init(): void {
 			nameMatch = false,
 		): Promise<Mapping> {
 			// "none": no match for the anime, only the episodes pointed at their own show or movie
-			if (override.tmdbNone) return { status: "failed", reason: "your override sets none", map: overrideEpisodes(override, {}, undefined) };
-			const tmdbId = override.tmdbId ?? (Number((metadata?.mappings?.themoviedbId ?? "").replace(/\D/g, "")) || undefined);
+			if (override.tmdbNone)
+				return {
+					status: "failed",
+					reason: "your override sets none",
+					map: overrideEpisodes(override, {}, undefined),
+				};
+			const tmdbId =
+				override.tmdbId ?? (Number((metadata?.mappings?.themoviedbId ?? "").replace(/\D/g, "")) || undefined);
 			// A failed match still takes the episodes their overrides point at (their own show or movie, else this one's ID)
-			const fail = (reason: string): Mapping => ({ status: "failed", reason, map: overrideEpisodes(override, {}, tmdbId) });
+			const fail = (reason: string): Mapping => ({
+				status: "failed",
+				reason,
+				map: overrideEpisodes(override, {}, tmdbId),
+			});
 			// The AniDB match only while in use (its dates and episodes help the match); the stored one tells whether the list
 			// the plugin supplies was dated by AniDB
 			const storedAnidb = anidbStore.get(mediaId);
-			const anidbInUse = storedAnidb?.status === "override" || (storedAnidb?.status === "verified" && anidbLookup());
+			const anidbInUse =
+				storedAnidb?.status === "override" || (storedAnidb?.status === "verified" && anidbLookup());
 			const anidbMatch = !override.anidbNone && anidbInUse ? storedAnidb : undefined;
 			const episodes = metadata?.episodes ?? {};
 			// AniList's total. Seanime hands optional numbers over as wrapped Go pointers, which === never equals.
@@ -3023,7 +3481,8 @@ function init(): void {
 			let tmdbType: "tv" | "movie" = "tv";
 			let details: CEM.TMDBTVShowDetails | CEM.TMDBMovieDetails | undefined;
 			if (typeof override.tmdbSeason !== "number") {
-				const byFormat: ("tv" | "movie")[] = media?.format?.valueOf() === "MOVIE" ? ["movie", "tv"] : ["tv", "movie"];
+				const byFormat: ("tv" | "movie")[] =
+					media?.format?.valueOf() === "MOVIE" ? ["movie", "tv"] : ["tv", "movie"];
 				const order = override.tmdbType ? [override.tmdbType] : byFormat;
 				let error: unknown;
 				/** The movie with this ID came out at another time: with the type unknown, the show with it is tried */
@@ -3036,8 +3495,12 @@ function init(): void {
 						// lists episode by episode. Only years apart: TMDB often dates a movie by its premiere, weeks or months
 						// before. A borrowed one is checked closer (see searchTmdb).
 						const unsure = type === "movie" && !override.tmdbType && !claimed;
-						const series = total > 1 && /^TV/.test(String(media?.format ?? "")) ? `this anime is a TV series of ${total} episodes` : "";
-						const problem = unsure && (series || otherYear(media, metadata, loaded as CEM.TMDBMovieDetails));
+						const series =
+							total > 1 && /^TV/.test(String(media?.format ?? ""))
+								? `this anime is a TV series of ${total} episodes`
+								: "";
+						const problem =
+							unsure && (series || otherYear(media, metadata, loaded as CEM.TMDBMovieDetails));
 						if (problem) {
 							otherMovie = `TMDB movie ${tmdbId} doesn't fit: ${problem}`;
 							continue;
@@ -3049,10 +3512,13 @@ function init(): void {
 						error = e;
 					}
 				}
-				if (!details && otherMovie) return { ...fail(`${otherMovie}, and TMDB has no show with that ID`), tmdbId };
+				if (!details && otherMovie)
+					return { ...fail(`${otherMovie}, and TMDB has no show with that ID`), tmdbId };
 				if (!details) {
 					const from = override.tmdbId ? "your override" : "Animap";
-					throw new Error(`TMDB ID ${tmdbId} (from ${from}) didn't load: ${(error as Error)?.message ?? "unknown error"}`);
+					throw new Error(
+						`TMDB ID ${tmdbId} (from ${from}) didn't load: ${(error as Error)?.message ?? "unknown error"}`,
+					);
 				}
 			}
 
@@ -3065,8 +3531,19 @@ function init(): void {
 			}
 
 			const input: MatchInput = {
-				mediaId, media, session, override, tmdbId, episodes, mainKeys, highest, total, storedAnidb, anidbMatch,
-				borrowed: !!claimed, fail,
+				mediaId,
+				media,
+				session,
+				override,
+				tmdbId,
+				episodes,
+				mainKeys,
+				highest,
+				total,
+				storedAnidb,
+				anidbMatch,
+				borrowed: !!claimed,
+				fail,
 			};
 			if (typeof override.tmdbSeason === "number") return overrideMapping(input, override.tmdbSeason);
 			return airDateMapping(input, details as CEM.TMDBTVShowDetails, claimed ?? {}, nameMatch);
@@ -3105,7 +3582,8 @@ function init(): void {
 					.map((o) => o.tmdbSeason as number),
 			]);
 			const ranged = ranges ? await rangeRun(session, tmdbId, ranges) : undefined;
-			if (typeof ranged === "string") return { ...m.fail(`Your TMDB Episodes ranges don't fit: ${ranged}.`), tmdbId };
+			if (typeof ranged === "string")
+				return { ...m.fail(`Your TMDB Episodes ranges don't fit: ${ranged}.`), tmdbId };
 			const run = ranged ?? (await seasonRun(session, tmdbId, seasons));
 			// Position in the run: the TMDB episode number for one season, the running count for several
 			const numbered = run.map((r, i) => ({ ...r.ep, episode_number: multi ? i + 1 : r.episode }));
@@ -3116,7 +3594,8 @@ function init(): void {
 				const n = ep.episode_number - offset;
 				if (n >= 1 && n <= limit) keys.push(`${n}`);
 			}
-			for (const ep of override.episodeOverrides) if (ep.aniDBEpisode && tmdbFields(ep)) keys.push(ep.aniDBEpisode);
+			for (const ep of override.episodeOverrides)
+				if (ep.aniDBEpisode && tmdbFields(ep)) keys.push(ep.aniDBEpisode);
 
 			const map: Record<string, CEM.TMDBTarget> = {};
 			for (const key of keys) {
@@ -3133,7 +3612,8 @@ function init(): void {
 					continue;
 				}
 				// The offset only applies to main episodes ("12"), not specials ("S1")
-				const n = o.tmdbEpisode ?? (number ? parseInt(number[0], 10) + (/^\d+$/.test(key) ? offset : 0) : undefined);
+				const n =
+					o.tmdbEpisode ?? (number ? parseInt(number[0], 10) + (/^\d+$/.test(key) ? offset : 0) : undefined);
 				if (n === undefined) continue;
 				if (!multi || id !== tmdbId) {
 					// An offset below zero puts the first episodes before the season (Doraemon's 1778=S27E1: episodes
@@ -3162,7 +3642,12 @@ function init(): void {
 			const { mediaId, override, tmdbId, anidbMatch, fail } = m;
 			const dates = datedEpisodes(m);
 			if (!dates) {
-				return { ...fail("There are no air dates to match against yet. Set the TMDB Episodes in the Media tab of Overrides."), tmdbId };
+				return {
+					...fail(
+						"There are no air dates to match against yet. Set the TMDB Episodes in the Media tab of Overrides.",
+					),
+					tmdbId,
+				};
 			}
 			const { anidbDated, listFromAnidb, anidbOk } = dates;
 			let dated = dates.dated;
@@ -3205,7 +3690,14 @@ function init(): void {
 			Object.assign(map, best.map);
 			const segments = best.segments;
 
-			const other = await matchByTitleOrCount(m, near, { dated, first, map, segments: segments.length, matched: best.matched, nameMatch });
+			const other = await matchByTitleOrCount(m, near, {
+				dated,
+				first,
+				map,
+				segments: segments.length,
+				matched: best.matched,
+				nameMatch,
+			});
 			if ("failed" in other) return { ...fail(other.failed), tmdbId };
 			if (other.pick) {
 				byAnidb = listFromAnidb && anidbOk;
@@ -3215,7 +3707,9 @@ function init(): void {
 			}
 			const singles = other.pick ? [] : best.singles;
 			for (const x of singles) {
-				log.step(`${mediaId}: episode ${x.n} is TMDB S${x.season}E${x.episode} by its own air date, apart from the others`);
+				log.step(
+					`${mediaId}: episode ${x.n} is TMDB S${x.season}E${x.episode} by its own air date, apart from the others`,
+				);
 			}
 
 			const fallback = await fillRemaining(m, map, segments, show, near.candidates);
@@ -3244,8 +3738,11 @@ function init(): void {
 			const today = Math.floor(Date.now() / DAY);
 			const anidbOk = anidbEvidence(anidbMatch);
 			// The list the plugin supplies (no Animap entry) is dated from AniDB: its dates are AniDB's evidence
-			const listFromAnidb = !!animap.get(mediaId)?.fallback && Object.keys(storedAnidb?.airDates ?? {}).length > 0;
-			const ownDated = mainKeys.map((k) => ({ n: Number(k), day: toDay(episodes[k].airDate) })).filter((d) => !isNaN(d.day));
+			const listFromAnidb =
+				!!animap.get(mediaId)?.fallback && Object.keys(storedAnidb?.airDates ?? {}).length > 0;
+			const ownDated = mainKeys
+				.map((k) => ({ n: Number(k), day: toDay(episodes[k].airDate) }))
+				.filter((d) => !isNaN(d.day));
 			const allDated: Dated = listFromAnidb && !anidbOk ? [] : ownDated;
 			let dated = allDated.filter((d) => d.day <= today + 1);
 			// Nothing aired yet: TMDB usually lists upcoming episodes with their dates too
@@ -3278,8 +3775,16 @@ function init(): void {
 		 * The TMDB episodes a match can land on: those of the regular seasons that overlap the anime's air dates (first to
 		 * last), plus specials (ONAs and OVAs often live there), but not ones other anime have as their own (claimed).
 		 */
-		async function tmdbEpisodesNear(m: MatchInput, show: CEM.TMDBTVShowDetails, first: number, last: number, claimed: Record<string, boolean>) {
-			const regular = (show.seasons ?? []).filter((s) => s.season_number > 0).sort((a, b) => a.season_number - b.season_number);
+		async function tmdbEpisodesNear(
+			m: MatchInput,
+			show: CEM.TMDBTVShowDetails,
+			first: number,
+			last: number,
+			claimed: Record<string, boolean>,
+		) {
+			const regular = (show.seasons ?? [])
+				.filter((s) => s.season_number > 0)
+				.sort((a, b) => a.season_number - b.season_number);
 			const wanted = regular
 				.filter((s, i) => {
 					const start = toDay(s.air_date);
@@ -3362,7 +3867,12 @@ function init(): void {
 					const ranked = Object.keys(score).sort((a, b) => {
 						const [sa, oa] = a.split(":").map(Number);
 						const [sb, ob] = b.split(":").map(Number);
-						return score[b] - score[a] || specialsLast(sa) - specialsLast(sb) || Math.abs(oa) - Math.abs(ob) || sa - sb;
+						return (
+							score[b] - score[a] ||
+							specialsLast(sa) - specialsLast(sb) ||
+							Math.abs(oa) - Math.abs(ob) ||
+							sa - sb
+						);
 					});
 					const pick = ranked[0];
 					if (!pick || votes[pick] < minVotes) break;
@@ -3396,8 +3906,15 @@ function init(): void {
 				const singles: { n: number; season: number; episode: number }[] = [];
 				for (const d of set) {
 					const s = segments.filter((x) => x.from <= d.n).pop() ?? segments[0];
-					if (!s || map[`${d.n}`] || Math.abs((tmdbDays[`${s.season}:${d.n + s.offset}`] ?? Infinity) - shift - d.day) <= 7) continue;
-					const hits = (byDay[d.day + shift] ?? []).filter((c) => c.season === s.season && !claimedHere[`${c.season}:${c.episode}`]);
+					if (
+						!s ||
+						map[`${d.n}`] ||
+						Math.abs((tmdbDays[`${s.season}:${d.n + s.offset}`] ?? Infinity) - shift - d.day) <= 7
+					)
+						continue;
+					const hits = (byDay[d.day + shift] ?? []).filter(
+						(c) => c.season === s.season && !claimedHere[`${c.season}:${c.episode}`],
+					);
 					if (hits.length !== 1) continue;
 					map[`${d.n}`] = { tmdbId, season: s.season, episode: hits[0].episode };
 					claimedHere[`${s.season}:${hits[0].episode}`] = true;
@@ -3418,10 +3935,13 @@ function init(): void {
 				// week's shift and an episode off
 				const byN: Record<number, number> = {};
 				for (const d of set) byN[d.n] = d.day;
-				const early = earlyScreenings((n) => {
-					const day = tmdbDays[at(n)];
-					return byN[n] !== undefined && day !== undefined ? [byN[n], day - shift] : undefined;
-				}, Math.max(0, ...set.map((d) => d.n)));
+				const early = earlyScreenings(
+					(n) => {
+						const day = tmdbDays[at(n)];
+						return byN[n] !== undefined && day !== undefined ? [byN[n], day - shift] : undefined;
+					},
+					Math.max(0, ...set.map((d) => d.n)),
+				);
 				for (const d of set) {
 					const day = tmdbDays[at(d.n)];
 					if (day !== undefined && Math.abs(day - shift - d.day) > 1 && d.n > early) against++;
@@ -3429,7 +3949,12 @@ function init(): void {
 				for (const key of mainKeys) {
 					const here = at(Number(key));
 					const [season, episode] = here.split(":").map(Number);
-					if (finales[here] && episodes[`${Number(key) + 1}`] && at(Number(key) + 1) === `${season}:${episode + 1}`) against++;
+					if (
+						finales[here] &&
+						episodes[`${Number(key) + 1}`] &&
+						at(Number(key) + 1) === `${season}:${episode + 1}`
+					)
+						against++;
 				}
 				return { map, segments, singles, matched: mapped, against, shift };
 			};
@@ -3452,7 +3977,8 @@ function init(): void {
 			const votes: Record<string, number> = {};
 			const titles: Record<string, string> = {};
 			for (const n of numbers) {
-				for (const ep of (await m.session.season(m.tmdbId, n)).episodes) titles[`${n}:${ep.episode_number}`] = plainTitle(ep.name);
+				for (const ep of (await m.session.season(m.tmdbId, n)).episodes)
+					titles[`${n}:${ep.episode_number}`] = plainTitle(ep.name);
 			}
 			// TMDB's episodes by title, so each titled episode only looks at the ones with its title
 			const byTitle: Record<string, string[]> = {};
@@ -3479,21 +4005,40 @@ function init(): void {
 		async function matchByTitleOrCount(
 			m: MatchInput,
 			near: TmdbNear,
-			found: { dated: Dated; first: number; map: Record<string, CEM.TMDBTarget>; segments: number; matched: number; nameMatch: boolean },
-			): Promise<
-				{ pick?: { season: number; offset: number }; flags: { byTitle?: boolean; byName?: boolean; byCount?: boolean } } | { failed: string }
-			> {
+			found: {
+				dated: Dated;
+				first: number;
+				map: Record<string, CEM.TMDBTarget>;
+				segments: number;
+				matched: number;
+				nameMatch: boolean;
+			},
+		): Promise<
+			| {
+					pick?: { season: number; offset: number };
+					flags: { byTitle?: boolean; byName?: boolean; byCount?: boolean };
+			  }
+			| { failed: string }
+		> {
 			const { mediaId, session, tmdbId, episodes, mainKeys, highest, total } = m;
 			const { regular, wanted, tmdbDays } = near;
 			const { dated, first, map, segments, matched, nameMatch } = found;
 			// Animap's episode titles are often TMDB's word for word (placeholders like "Episode 4" don't count)
-			const titled = mainKeys.map((k) => ({ n: Number(k), title: plainTitle(episodes[k].title) })).filter((t) => t.title);
+			const titled = mainKeys
+				.map((k) => ({ n: Number(k), title: plainTitle(episodes[k].title) }))
+				.filter((t) => t.title);
 			if (segments && matched * 2 >= dated.length) {
 				if (titled.length < 2) return { flags: {} };
 				// The dates matched, but titles outrank them: when TMDB's dates run a week off, the dates can point one
 				// episode too early with most of them still lining up
-				const { votes, titles, top } = await voteByTitle(m, wanted.filter((n) => n > 0), titled);
-				const hits = titled.filter((t) => map[`${t.n}`] && titles[`${map[`${t.n}`].season}:${map[`${t.n}`].episode}`] === t.title).length;
+				const { votes, titles, top } = await voteByTitle(
+					m,
+					wanted.filter((n) => n > 0),
+					titled,
+				);
+				const hits = titled.filter(
+					(t) => map[`${t.n}`] && titles[`${map[`${t.n}`].season}:${map[`${t.n}`].episode}`] === t.title,
+				).length;
 				if (!top || votes[top] < 2 || votes[top] <= hits) return { flags: {} };
 				const [season, offset] = top.split(":").map(Number);
 				log.step(
@@ -3506,7 +4051,11 @@ function init(): void {
 			// The air dates don't line up: TMDB lists a streaming release (every episode on one day) instead of the
 			// Japanese broadcast, or simply wrong dates. Episode titles come next.
 			const numbers = regular.map((s) => s.season_number);
-			if (titled.length) await session.prefetch(tmdbId, numbers.filter((n) => wanted.indexOf(n) === -1));
+			if (titled.length)
+				await session.prefetch(
+					tmdbId,
+					numbers.filter((n) => wanted.indexOf(n) === -1),
+				);
 			const noTitles = { votes: {} as Record<string, number>, top: undefined, best: undefined };
 			const { votes, top, best } = titled.length ? await voteByTitle(m, numbers, titled) : noTitles;
 			if (top) {
@@ -3525,7 +4074,11 @@ function init(): void {
 				const fits = regular.filter((s) => s.episode_count === count);
 				if (count < 1 || fits.length !== 1) return undefined;
 				const n = fits[0].season_number;
-				return dated.every((d) => tmdbDays[`${n}:${d.n}`] !== undefined && Math.abs(tmdbDays[`${n}:${d.n}`] - d.day) <= 7) ? n : undefined;
+				return dated.every(
+					(d) => tmdbDays[`${n}:${d.n}`] !== undefined && Math.abs(tmdbDays[`${n}:${d.n}`] - d.day) <= 7,
+				)
+					? n
+					: undefined;
 			};
 			const named = nameMatch ? nearSeason() : undefined;
 			if (named !== undefined) {
@@ -3583,7 +4136,8 @@ function init(): void {
 			const limit = seasonLimit(m, seasonEpisodes, fallback.offset);
 			for (const ep of seasonEpisodes) {
 				const n = ep.episode_number - fallback.offset;
-				if (n <= highest || n > limit || map[`${n}`] || used[`${fallback.season}:${ep.episode_number}`]) continue;
+				if (n <= highest || n > limit || map[`${n}`] || used[`${fallback.season}:${ep.episode_number}`])
+					continue;
 				map[`${n}`] = { tmdbId, season: fallback.season, episode: ep.episode_number };
 				used[`${fallback.season}:${ep.episode_number}`] = true;
 			}
@@ -3592,7 +4146,9 @@ function init(): void {
 			for (const key of Object.keys(episodes).filter((k) => /^S\d+$/.test(k))) {
 				const day = toDay(episodes[key].airDate);
 				if (isNaN(day)) continue;
-				const hits = candidates.filter((c) => c.season === 0 && Math.abs(c.day - day) <= 1 && !used[`0:${c.episode}`]);
+				const hits = candidates.filter(
+					(c) => c.season === 0 && Math.abs(c.day - day) <= 1 && !used[`0:${c.episode}`],
+				);
 				const exact = hits.filter((c) => c.day === day);
 				const hit = exact.length === 1 ? exact[0] : hits.length === 1 ? hits[0] : undefined;
 				if (hit) map[key] = { tmdbId, season: 0, episode: hit.episode };
@@ -3600,8 +4156,15 @@ function init(): void {
 
 			// Seanime shows AniDB's first special as episode 0 when AniList counts one episode more than AniDB has main
 			// episodes. Not dated alike on TMDB: its special called "Episode 0", if there's exactly one.
-			if (!map.S1 && episodes.S1 && total === highest + 1 && (show.seasons ?? []).some((s) => s.season_number === 0)) {
-				const named = (await session.season(tmdbId, 0)).episodes.filter((ep) => /\b(episode|ep\.?)\s*(0|zero)\b|#0\b/i.test(ep.name ?? ""));
+			if (
+				!map.S1 &&
+				episodes.S1 &&
+				total === highest + 1 &&
+				(show.seasons ?? []).some((s) => s.season_number === 0)
+			) {
+				const named = (await session.season(tmdbId, 0)).episodes.filter((ep) =>
+					/\b(episode|ep\.?)\s*(0|zero)\b|#0\b/i.test(ep.name ?? ""),
+				);
 				if (named.length === 1) {
 					map.S1 = { tmdbId, season: 0, episode: named[0].episode_number };
 					log.step(`${mediaId}: episode 0 (S1) is TMDB S0E${named[0].episode_number} "${named[0].name}"`);
@@ -3619,7 +4182,8 @@ function init(): void {
 		const traces: Record<string, string[]> = {};
 		const trace = {
 			begin: (kind: "tmdb" | "anidb", mediaId: number) => void (traces[`${kind}${mediaId}`] = []),
-			add: (kind: "tmdb" | "anidb", mediaId: number, step: string) => void traces[`${kind}${mediaId}`]?.push(step),
+			add: (kind: "tmdb" | "anidb", mediaId: number, step: string) =>
+				void traces[`${kind}${mediaId}`]?.push(step),
 			end: (kind: "tmdb" | "anidb", mediaId: number) => {
 				const steps = traces[`${kind}${mediaId}`];
 				delete traces[`${kind}${mediaId}`];
@@ -3642,7 +4206,9 @@ function init(): void {
 			if (m.status !== "matched") {
 				return `didn't fit: ${(m.reason ?? "no match").replace(/\s*Set the TMDB (Season and Offset|Episodes) in Overrides\.$/, "")}`;
 			}
-			const apart = (m.singles ?? []).map((x) => `, episode ${x.n} on S${x.season}E${x.episode} by its own air date`).join("");
+			const apart = (m.singles ?? [])
+				.map((x) => `, episode ${x.n} on S${x.season}E${x.episode} by its own air date`)
+				.join("");
 			const where = m.tmdbType === "movie" ? " (a movie)" : m.fallback ? `, ${matchWhere(m)}${apart}` : "";
 			return `matched${where}, ${m.source === "override" ? "as your override sets it" : matchedBy(m)}`;
 		}
@@ -3652,7 +4218,12 @@ function init(): void {
 		 * (what Bulk Update does). A forced call waits for a refresh already running instead of reusing it. The scope
 		 * says how AniList relation lookups are paced (see Scope); the user's own actions use "page".
 		 */
-		async function refreshAnime(mediaId: number, writeMetadata: boolean, force = false, scope: Scope = "page"): Promise<RefreshResult> {
+		async function refreshAnime(
+			mediaId: number,
+			writeMetadata: boolean,
+			force = false,
+			scope: Scope = "page",
+		): Promise<RefreshResult> {
 			const running = inFlight[mediaId];
 			if (running) {
 				if (!force) {
@@ -3671,7 +4242,12 @@ function init(): void {
 			}
 		}
 
-		async function doRefresh(mediaId: number, writeMetadata: boolean, force = false, scope: Scope = "page"): Promise<RefreshResult> {
+		async function doRefresh(
+			mediaId: number,
+			writeMetadata: boolean,
+			force = false,
+			scope: Scope = "page",
+		): Promise<RefreshResult> {
 			const result: RefreshResult = { saved: 0, written: [], missing: [] };
 			if (!tmdb.API_KEY) return result;
 			report(mediaId, "Loading the episode list");
@@ -3694,16 +4270,23 @@ function init(): void {
 					return { ...result, record: old };
 				}
 				// Episodes pointed at their own show or movie don't need the anime's (e.g. its ID no longer loads)
-				mapping = { status: "failed", reason: (e as Error).message, map: overrideEpisodes(override, {}, undefined) };
+				mapping = {
+					status: "failed",
+					reason: (e as Error).message,
+					map: overrideEpisodes(override, {}, undefined),
+				};
 			}
 			// Episodes whose override says "none": no still or fill-in, whatever the match
-			for (const o of override.episodeOverrides) if (o.tmdbNone && o.aniDBEpisode) delete mapping.map[o.aniDBEpisode];
+			for (const o of override.episodeOverrides)
+				if (o.tmdbNone && o.aniDBEpisode) delete mapping.map[o.aniDBEpisode];
 
 			if (mapping.status === "matched") report(mediaId, `Fetching TMDB ${mapping.tmdbId}'s episodes and stills`);
 			const { images, found } = await fetchEpisodes(mediaId, mapping, media, metadata, session, now);
 			const gapList = isOn("tmdb-fill-missing") ? gapKeys(mediaId) : [];
 			// A failed match's episodes are only the ones their overrides point at
-			const episodes = isOn("tmdb-fill-missing") ? fillInData(mediaId, found, images, gapList, media, metadata, now) : undefined;
+			const episodes = isOn("tmdb-fill-missing")
+				? fillInData(mediaId, found, images, gapList, media, metadata, now)
+				: undefined;
 			const next = nextCheck(mapping, old, media, metadata, images, found, gapList, now);
 
 			const { movie: _movie, segments, singles, noId, ...stored } = mapping;
@@ -3721,11 +4304,13 @@ function init(): void {
 			thumbnails.set(mediaId, record);
 			result.record = record;
 			rematchBorrowers(record);
-			if (writeMetadata && record.status === "matched") writeToCustom(mediaId, mapping, found, images, metadata, now, result);
+			if (writeMetadata && record.status === "matched")
+				writeToCustom(mediaId, mapping, found, images, metadata, now, result);
 
 			// No record shows as much as one without stills or fill-in: a first match with nothing to show rebuilds nothing
 			const shown = (r: CEM.ThumbnailRecord | undefined) => stableJson([r?.images ?? {}, r?.episodes ?? {}]);
-			const showsAnything = isOn("tmdb-thumbnails") || fillsMissing(mediaId) || !!record.episodes || !!old?.episodes;
+			const showsAnything =
+				isOn("tmdb-thumbnails") || fillsMissing(mediaId) || !!record.episodes || !!old?.episodes;
 			const imagesChanged = showsAnything && (flagged || shown(old) !== shown(record));
 			// Whether Seanime has metadata for it doesn't change with what was written. Not known yet: the metadata loaded
 			// above already answers it (without a status the hook didn't supply it), so there's no need to clear Seanime's
@@ -3737,7 +4322,8 @@ function init(): void {
 
 			const name = media?.title?.userPreferred ?? `${mediaId}`;
 			if (record.status === "failed") {
-				if (old?.status !== "failed" || old.reason !== record.reason) log.warn(`${name} (${mediaId}): match failed: ${record.reason}`);
+				if (old?.status !== "failed" || old.reason !== record.reason)
+					log.warn(`${name} (${mediaId}): match failed: ${record.reason}`);
 				else log.step(`${name} (${mediaId}): still failing: ${record.reason}`);
 			} else {
 				const where = record.tmdbType === "movie" ? "movie" : matchWhere(record) || "?";
@@ -3747,7 +4333,9 @@ function init(): void {
 				if (imagesChanged || result.saved || old?.tmdbId !== record.tmdbId) log.info(line);
 				else log.step(`${line} (unchanged)`);
 			}
-			log.step(`${name} (${mediaId}): next refresh ${new Date(record.nextCheckAt ?? 0).toISOString()} (${next.why})`);
+			log.step(
+				`${name} (${mediaId}): next refresh ${new Date(record.nextCheckAt ?? 0).toISOString()} (${next.why})`,
+			);
 			if (debugging) {
 				const { episodes: _filled, ...shown } = record;
 				log.inspect(`${mediaId}: stored TMDB record`, shown);
@@ -3781,20 +4369,31 @@ function init(): void {
 			// No Animap data (e.g. 18+ entries): flag it, so onAnimeMetadataRequested can supply the episode list the
 			// TMDB stills and custom metadata are applied to
 			const flagged = !metadata && !animap.get(mediaId) && !isCustomSource(mediaId);
-			if (flagged) animap.set(mediaId, { fallback: true, episodeCount: episodeCount(media), checkedAt: now, since: now });
+			if (flagged)
+				animap.set(mediaId, { fallback: true, episodeCount: episodeCount(media), checkedAt: now, since: now });
 			return { media, metadata, flagged };
 		}
 
 		/** The refresh's first step: which episode list the match works from */
-		function episodeListStep(mediaId: number, media: $app.AL_BaseAnime | undefined, metadata: $app.Metadata_AnimeMetadata | undefined) {
+		function episodeListStep(
+			mediaId: number,
+			media: $app.AL_BaseAnime | undefined,
+			metadata: $app.Metadata_AnimeMetadata | undefined,
+		) {
 			const listed = Object.keys(metadata?.episodes ?? {}).filter((k) => /^\d+$/.test(k));
 			const dated = listed.filter((k) => !!metadata?.episodes?.[k]?.airDate).length;
 			const total = Number(media?.episodes) || 0;
 			// See buildMapping: a finished anime's episodes past its AniList total aren't its own
 			const ownOnly = total === 1 ? "episode 1 is" : `episodes 1-${total} are`;
-			const own = String(media?.status) === "FINISHED" && total && listed.length > total ? `; only ${ownOnly} its own, by AniList's total` : "";
+			const own =
+				String(media?.status) === "FINISHED" && total && listed.length > total
+					? `; only ${ownOnly} its own, by AniList's total`
+					: "";
 			const count = `${listed.length} episode${listed.length === 1 ? "" : "s"}, ${dated === listed.length ? "all" : dated} dated${own}`;
-			const byAnidb = anidbEvidence(anidbStore.get(mediaId)) && Object.keys(anidbStore.get(mediaId)?.airDates ?? {}).length ? " by AniDB" : "";
+			const byAnidb =
+				anidbEvidence(anidbStore.get(mediaId)) && Object.keys(anidbStore.get(mediaId)?.airDates ?? {}).length
+					? " by AniDB"
+					: "";
 			if (animap.get(mediaId)?.fallback)
 				return metadata
 					? `Episode list: the plugin's own, Animap has no entry for this anime (${count}${byAnidb})`
@@ -3828,19 +4427,36 @@ function init(): void {
 			// has to date its first episode that day), or for a one-episode anime its start year (a movie found has to
 			// have come out that year; a show can't line up without dates); anime without any need the fill-in setting.
 			const start = media?.startDate;
-			const unaired = !!(start?.year && start.month && start.day) && !Object.keys(metadata?.episodes ?? {}).some((k) => /^\d+$/.test(k));
+			const unaired =
+				!!(start?.year && start.month && start.day) &&
+				!Object.keys(metadata?.episodes ?? {}).some((k) => /^\d+$/.test(k));
 			const single = !!start?.year && (Number(media?.episodes) || 0) <= 1;
-			const dated = unaired || single || Object.keys(metadata?.episodes ?? {}).some((k) => !!metadata?.episodes?.[k]?.airDate);
+			const dated =
+				unaired ||
+				single ||
+				Object.keys(metadata?.episodes ?? {}).some((k) => !!metadata?.episodes?.[k]?.airDate);
 			const custom = isCustomSource(mediaId); // custom sources have no mappings, the title is all there is
 			const { found, firstValid } = await searchTmdb(
-				mediaId, media, metadata, session, undefined, dated || custom || fillsMissing(mediaId), mapping.tmdbId ? [mapping.tmdbId] : [], scope,
+				mediaId,
+				media,
+				metadata,
+				session,
+				undefined,
+				dated || custom || fillsMissing(mediaId),
+				mapping.tmdbId ? [mapping.tmdbId] : [],
+				scope,
 			);
 			if (found) {
 				const foundOverride = { ...override, tmdbId: found.id, tmdbType: found.mapping.tmdbType };
 				const claimed = found.borrowed ? claimedEpisodes(mediaId, found.id) : undefined;
 				const again = await buildMapping(mediaId, media, metadata, session, foundOverride, claimed);
 				const base = again.status === "matched" ? again : found.mapping;
-				mapping = { ...base, source: "auto", idFrom: found.from, ...(found.borrowed ? { borrowed: true } : {}) };
+				mapping = {
+					...base,
+					source: "auto",
+					idFrom: found.from,
+					...(found.borrowed ? { borrowed: true } : {}),
+				};
 			} else if (mapping.noId && firstValid) {
 				// Say what was found and why it didn't fit, not just that Animap had nothing
 				const why = `TMDB ${firstValid.id} (from ${firstValid.from}) didn't line up: ${firstValid.reason ?? "no match"}`;
@@ -3869,7 +4485,9 @@ function init(): void {
 			const freshlyAired = (key: string) => {
 				if (!/^\d+$/.test(key)) return false;
 				const day = toDay(metadata?.episodes?.[key]?.airDate);
-				return isNaN(day) ? Number(key) < nextEpisode && Number(key) >= nextEpisode - 2 : day <= today + 1 && today - day <= 14;
+				return isNaN(day)
+					? Number(key) < nextEpisode && Number(key) >= nextEpisode - 2
+					: day <= today + 1 && today - day <= 14;
 			};
 			const lacks = (e: TMDBEpisode) => !e.still_path || !e.overview;
 			// What a second copy adds: only fields the first lacks
@@ -3877,16 +4495,34 @@ function init(): void {
 				if (!more || !((more.still_path && !e.still_path) || (more.overview && !e.overview))) return e;
 				log.step(`${mediaId}: episode ${key}: TMDB's ${where} has more than its cached season list; using it`);
 				const name = plainTitle(e.name) ? e.name : more.name || e.name;
-				return { ...e, still_path: e.still_path || more.still_path, overview: e.overview || more.overview, name };
+				return {
+					...e,
+					still_path: e.still_path || more.still_path,
+					overview: e.overview || more.overview,
+					name,
+				};
 			};
 			const fresh: Record<string, Promise<CEM.TMDBSeasonResults | undefined>> = {};
 			const freshSeason = (tmdbId: number, season: number) =>
-				(fresh[`${tmdbId}:${season}`] ??= tmdb.getSeasons(tmdbId, [season], now).then((r) => r[season], () => undefined));
+				(fresh[`${tmdbId}:${season}`] ??= tmdb.getSeasons(tmdbId, [season], now).then(
+					(r) => r[season],
+					() => undefined,
+				));
 			for (const [key, target] of Object.entries(mapping.map)) {
 				let episode = await session.episode(target);
-				if (episode && lacks(episode) && freshlyAired(key) && target.season !== undefined && target.episode !== undefined) {
-					const tmdbId = target.tmdbId, season = target.season, number = target.episode;
-					const current = (await freshSeason(tmdbId, season))?.episodes?.find((e) => e.episode_number === number);
+				if (
+					episode &&
+					lacks(episode) &&
+					freshlyAired(key) &&
+					target.season !== undefined &&
+					target.episode !== undefined
+				) {
+					const tmdbId = target.tmdbId,
+						season = target.season,
+						number = target.episode;
+					const current = (await freshSeason(tmdbId, season))?.episodes?.find(
+						(e) => e.episode_number === number,
+					);
 					episode = merge(episode, current, "current season list", key);
 				}
 				if (!episode) continue;
@@ -3919,7 +4555,8 @@ function init(): void {
 			const aired = new Date(now).toISOString().slice(0, 10);
 			const airedByDate = (key: string) => !!found[key].air_date && found[key].air_date <= aired;
 			const airedEarly = (key: string) => /^\d+$/.test(key) && Number(key) < nextEpisode && !airedByDate(key);
-			const absent = (key: string) => /^\d+$/.test(key) && !metadata?.episodes?.[key] && (airedByDate(key) || airedEarly(key));
+			const absent = (key: string) =>
+				/^\d+$/.test(key) && !metadata?.episodes?.[key] && (airedByDate(key) || airedEarly(key));
 			for (const [key, ep] of Object.entries(found)) {
 				if (!all && gaps.indexOf(key) === -1 && !absent(key)) continue;
 				// Nothing to fill in: TMDB's placeholder ("Episode 17") without an overview, still or runtime
@@ -3964,13 +4601,20 @@ function init(): void {
 					const aired = (!isNaN(day) && day <= today + 1) || Number(key) < nextEpisode;
 					const recent = isNaN(day) || today - day <= 30;
 					const gap = gapList.indexOf(key) !== -1;
-					const missing = !images[key] ? isOn("tmdb-thumbnails") || !isOn("tmdb-fill-missing") || gap : gap && !found[key]?.overview;
+					const missing = !images[key]
+						? isOn("tmdb-thumbnails") || !isOn("tmdb-fill-missing") || gap
+						: gap && !found[key]?.overview;
 					return aired && recent && missing ? (isNaN(day) ? today : Math.min(day, today)) : NaN;
 				})
 				.filter((day) => !isNaN(day));
 			const recentWithoutStill = lacking.length > 0;
 			const justAired = lacking.some((day) => today - day <= 2);
-			const failedSince = mapping.status === "failed" ? (old?.status === "failed" ? old.failedSince ?? old.refreshedAt : now) : undefined;
+			const failedSince =
+				mapping.status === "failed"
+					? old?.status === "failed"
+						? (old.failedSince ?? old.refreshedAt)
+						: now
+					: undefined;
 			const failedEvery = failedSince !== undefined && now - failedSince >= 7 * DAY ? 7 * DAY : DAY;
 			let at = now + (mapping.status === "failed" ? failedEvery : 7 * DAY);
 			const airingAt = media?.nextAiringEpisode?.airingAt;
@@ -3979,7 +4623,8 @@ function init(): void {
 			if (recentWithoutStill) at = Math.min(at, now + (justAired ? 2 * HOUR : DAY));
 
 			let why = "finished, weekly";
-			if (mapping.status === "failed") why = `failed${failedEvery > DAY ? " for over a week, weekly" : ", daily"}`;
+			if (mapping.status === "failed")
+				why = `failed${failedEvery > DAY ? " for over a week, weekly" : ", daily"}`;
 			else if (recentWithoutStill && at === now + (justAired ? 2 * HOUR : DAY))
 				why = `a recent episode has no still or overview yet, ${justAired ? "every 2 hours" : "daily"}`;
 			else if (airingAt) why = "an hour after the next episode airs";
@@ -4000,10 +4645,13 @@ function init(): void {
 			const own = mine(record);
 			for (const other of Object.values(thumbnails.all())) {
 				const sameMatch = other.tmdbId === record.tmdbId && other.tmdbType === record.tmdbType;
-				if (other.mediaId === record.mediaId || !sameMatch || !other.borrowed || other.nextCheckAt === 1) continue;
+				if (other.mediaId === record.mediaId || !sameMatch || !other.borrowed || other.nextCheckAt === 1)
+					continue;
 				if (record.tmdbType === "tv" && !mine(other).some((t) => own.indexOf(t) !== -1)) continue;
 				const what = record.tmdbType === "tv" ? "'s episodes are" : " is";
-				log.step(`${other.mediaId}: TMDB ${record.tmdbId}${what} ${record.mediaId}'s own match; matching ${other.mediaId} again`);
+				log.step(
+					`${other.mediaId}: TMDB ${record.tmdbId}${what} ${record.mediaId}'s own match; matching ${other.mediaId} again`,
+				);
 				thumbnails.set(other.mediaId, { ...other, nextCheckAt: 1 }); // due now
 			}
 		}
@@ -4019,7 +4667,10 @@ function init(): void {
 			result: RefreshResult,
 		) {
 			const today = Math.floor(now / DAY);
-			const explicit = tmdb.overrides.get(mediaId).episodeOverrides.filter(tmdbFields).map((o) => o.aniDBEpisode);
+			const explicit = tmdb.overrides
+				.get(mediaId)
+				.episodeOverrides.filter(tmdbFields)
+				.map((o) => o.aniDBEpisode);
 			for (const key of Object.keys(mapping.map)) {
 				const episode = found[key];
 				if (!episode) {
@@ -4052,7 +4703,9 @@ function init(): void {
 			if (await needsAnidb(mediaId)) await refreshAnidb(mediaId, true);
 			// TMDB with its switches on, or from a TMDB override (by hand, with a token)
 			const byTmdb = tmdbOn() || (!!tmdb.API_KEY && tmdbOverridden(mediaId));
-			const result: RefreshResult = byTmdb ? await refreshAnime(mediaId, false, true) : { saved: 0, written: [], missing: [] };
+			const result: RefreshResult = byTmdb
+				? await refreshAnime(mediaId, false, true)
+				: { saved: 0, written: [], missing: [] };
 			// TMDB's dates may let AniDB's ID be checked better (only redone when there are more of them)
 			if (byTmdb && (await needsAnidb(mediaId))) await refreshAnidb(mediaId);
 			scheduleRebuild(true);
@@ -4062,7 +4715,9 @@ function init(): void {
 				const none = tmdb.overrides.get(mediaId).tmdbNone;
 				const overridden = Object.keys(record.map).length;
 				if (!overridden && !none) throw new Error(record.reason ?? "Couldn't match this anime on TMDB.");
-				const episodes = overridden ? `, ${overridden} episode${overridden === 1 ? "" : "s"} from their own override` : "";
+				const episodes = overridden
+					? `, ${overridden} episode${overridden === 1 ? "" : "s"} from their own override`
+					: "";
 				return `Refreshed: ${none ? "TMDB set to none by your override" : "no TMDB match for the anime"}${episodes}.`;
 			}
 			const written = result.saved ? `, ${result.saved} episodes written` : "";
@@ -4089,7 +4744,9 @@ function init(): void {
 			try {
 				const res = await ctx.fetch(`https://api.ani.zip/mappings?anilist_id=${mediaId}`);
 				if (!res.ok) return {};
-				const mappings = (res.json() as { mappings?: { themoviedb_id?: string | number; anidb_id?: number } }).mappings ?? {};
+				const mappings =
+					(res.json() as { mappings?: { themoviedb_id?: string | number; anidb_id?: number } }).mappings ??
+					{};
 				const result = {
 					tmdbId: Number(`${mappings.themoviedb_id ?? ""}`.replace(/\D/g, "")) || undefined,
 					anidbId: mappings.anidb_id || undefined,
@@ -4108,7 +4765,9 @@ function init(): void {
 		 */
 		const ANIMEAPI_KEY = "ANIMEAPI_CACHE_V1";
 		let animeapiLastCall = 0;
-		async function animeapi(mediaId: number): Promise<{ tmdbId?: number; tmdbType?: "tv" | "movie"; anidbId?: number }> {
+		async function animeapi(
+			mediaId: number,
+		): Promise<{ tmdbId?: number; tmdbType?: "tv" | "movie"; anidbId?: number }> {
 			type Cached = { tmdbId?: number; tmdbType?: "tv" | "movie"; anidbId?: number; at: number };
 			const cache = $storage.get<Record<number, Cached>>(ANIMEAPI_KEY) ?? {};
 			const hit = cache[mediaId];
@@ -4121,7 +4780,11 @@ function init(): void {
 			try {
 				const res = await ctx.fetch(`https://animeapi.my.id/anilist/${mediaId}`, { timeout: 10 });
 				if (!res.ok && res.status !== 404) return {};
-				type Answer = { themoviedb?: number | null; themoviedb_type?: "tv" | "movie" | null; anidb?: number | null };
+				type Answer = {
+					themoviedb?: number | null;
+					themoviedb_type?: "tv" | "movie" | null;
+					anidb?: number | null;
+				};
 				const data = (res.ok ? res.json() : {}) as Answer;
 				const result = {
 					tmdbId: data.themoviedb || undefined,
@@ -4140,10 +4803,11 @@ function init(): void {
 
 		// V2: steps also take an alternative version (V1 cached "none" for those for 30 days)
 		const RELATIONS_KEY = "ANILIST_RELATIONS_V2";
-		if ($storage.get("ANILIST_RELATIONS_V1") !== undefined) $storage.remove("ANILIST_RELATIONS_V1");
+		if ($storage.get("ANILIST_RELATIONS_V1") != null) $storage.remove("ANILIST_RELATIONS_V1");
 		/** The relation steps on disk, read once (only this context uses them) and written through. */
 		let relationCache: Record<number, CEM.RelationStep> | undefined;
-		const relationSteps = () => (relationCache = relationCache ?? $storage.get<Record<number, CEM.RelationStep>>(RELATIONS_KEY) ?? {});
+		const relationSteps = () =>
+			(relationCache = relationCache ?? $storage.get<Record<number, CEM.RelationStep>>(RELATIONS_KEY) ?? {});
 		/**
 		 * One step up from an anime: its parent, else its prequel, else an alternative version (e.g. an edited cut of an
 		 * OVA, which TMDB keeps among that OVA's specials). Cached on disk for 30 days, so sequels sharing a
@@ -4154,7 +4818,9 @@ function init(): void {
 			const hit = relationSteps()[mediaId];
 			// Steps cached before the episode count was kept are asked again
 			if (hit && Date.now() - hit.at < RELATIONS_KEEP && !(hit.next && hit.next.episodes === undefined)) {
-				log.debug(`${mediaId}: related step (cached): ${hit.next ? `${hit.next.relation} ${hit.next.id}` : "none"}`);
+				log.debug(
+					`${mediaId}: related step (cached): ${hit.next ? `${hit.next.relation} ${hit.next.id}` : "none"}`,
+				);
 				return hit.next;
 			}
 			if (scope !== "page") await spaced("anilist-relations", RELATIONS_SPACING);
@@ -4168,7 +4834,8 @@ function init(): void {
 				log.debug(`${mediaId}: AniList relations unavailable`, e);
 				return undefined;
 			}
-			const anime = (relation: string) => edges.find((e) => e.relationType?.valueOf() === relation && e.node?.type?.valueOf() !== "MANGA");
+			const anime = (relation: string) =>
+				edges.find((e) => e.relationType?.valueOf() === relation && e.node?.type?.valueOf() !== "MANGA");
 			const edge = anime("PARENT") ?? anime("PREQUEL") ?? anime("ALTERNATIVE");
 			const next = edge?.node?.id
 				? {
@@ -4183,7 +4850,8 @@ function init(): void {
 			const now = Date.now();
 			steps[mediaId] = { next, at: now };
 			// Drop expired steps while writing
-			for (const key of Object.keys(steps)) if (now - steps[Number(key)].at >= RELATIONS_KEEP) delete steps[Number(key)];
+			for (const key of Object.keys(steps))
+				if (now - steps[Number(key)].at >= RELATIONS_KEEP) delete steps[Number(key)];
 			$storage.set(RELATIONS_KEY, steps);
 			return next;
 		}
@@ -4199,14 +4867,27 @@ function init(): void {
 			let current = mediaId;
 			log.time(`relations ${mediaId}`);
 			for (let step = 0; step < 5; step++) {
-				report(mediaId, step ? `Following the related anime on AniList (${step + 1})` : "Looking up related anime on AniList");
+				report(
+					mediaId,
+					step
+						? `Following the related anime on AniList (${step + 1})`
+						: "Looking up related anime on AniList",
+				);
 				const next = await relationStep(current, scope);
-				if (!next || next.id === mediaId || out.some((r) => r.id === next.id) || (step && next.relation === "alternative")) break;
+				if (
+					!next ||
+					next.id === mediaId ||
+					out.some((r) => r.id === next.id) ||
+					(step && next.relation === "alternative")
+				)
+					break;
 				out.push(next);
 				current = next.id;
 			}
 			log.timeEnd(`relations ${mediaId}`);
-			log.step(`${mediaId}: related anime: ${out.length ? out.map((r) => `${r.relation} ${r.id}`).join(" -> ") : "none"}`);
+			log.step(
+				`${mediaId}: related anime: ${out.length ? out.map((r) => `${r.relation} ${r.id}`).join(" -> ") : "none"}`,
+			);
 			return out;
 		}
 
@@ -4238,8 +4919,12 @@ function init(): void {
 		}
 
 		/** Whether TMDB has any still (or a movie backdrop) for a mapping's episodes. Seasons are already cached. */
-		async function hasStills(mapping: Awaited<ReturnType<typeof buildMapping>>, session: ReturnType<typeof tmdbSession>) {
-			for (const target of Object.values(mapping.map)) if ((await session.episode(target))?.still_path?.length) return true;
+		async function hasStills(
+			mapping: Awaited<ReturnType<typeof buildMapping>>,
+			session: ReturnType<typeof tmdbSession>,
+		) {
+			for (const target of Object.values(mapping.map))
+				if ((await session.episode(target))?.still_path?.length) return true;
 			return false;
 		}
 
@@ -4252,7 +4937,8 @@ function init(): void {
 			for (const r of Object.values(thumbnails.all())) {
 				if (r.mediaId === mediaId || r.status !== "matched" || r.tmdbType !== "tv" || r.borrowed) continue;
 				for (const [key, t] of Object.entries(r.map)) {
-					if (/^\d+$/.test(key) && t.tmdbId === tmdbId && t.season !== undefined) claimed[`${t.season}:${t.episode}`] = true;
+					if (/^\d+$/.test(key) && t.tmdbId === tmdbId && t.season !== undefined)
+						claimed[`${t.season}:${t.episode}`] = true;
 				}
 			}
 			return claimed;
@@ -4275,7 +4961,12 @@ function init(): void {
 					.replace(/\s+(?:[2-9]|II|III|IV|V)$/, "")
 					.replace(/([぀-ヿ一-鿿])[2-9]$/, "$1");
 			const subtitle = (t: string) => t.split(/\s+[-–~～]\s*|\s*[~～]\s*|:\s+|：/)[0];
-			const bare = unnumbered(title.replace(/(^|[^a-z])[\s(（\-:：]*(?:OVA|ONA|OAD|(?:the\s+)?movie|specials?|劇場版)[\s)）]*$/i, "$1"));
+			const bare = unnumbered(
+				title.replace(
+					/(^|[^a-z])[\s(（\-:：]*(?:OVA|ONA|OAD|(?:the\s+)?movie|specials?|劇場版)[\s)）]*$/i,
+					"$1",
+				),
+			);
 			if (bare !== title) add(bare);
 			add(subtitle(bare));
 			return out;
@@ -4315,13 +5006,20 @@ function init(): void {
 				const key = `${type ?? ""}${id}`;
 				// Without its type an ID is tried as both; with one, it's the same entry the ID names without it (a related
 				// anime's match, then its Animap ID: the same show)
-				const seen = type ? tried.indexOf(`${id}`) !== -1 : tried.indexOf(`tv${id}`) !== -1 || tried.indexOf(`movie${id}`) !== -1;
+				const seen = type
+					? tried.indexOf(`${id}`) !== -1
+					: tried.indexOf(`tv${id}`) !== -1 || tried.indexOf(`movie${id}`) !== -1;
 				if (tried.indexOf(key) !== -1 || seen) return undefined;
 				tried.push(key);
 				report(mediaId, `Checking TMDB ${id} from ${from}`);
 				let mapping: Mapping;
 				try {
-					const candidate = { mediaId, tmdbId: id, ...(type ? { tmdbType: type } : {}), episodeOverrides: [] };
+					const candidate = {
+						mediaId,
+						tmdbId: id,
+						...(type ? { tmdbType: type } : {}),
+						episodeOverrides: [],
+					};
 					const claimed = borrowed ? claimedEpisodes(mediaId, id) : undefined;
 					mapping = await buildMapping(mediaId, media, metadata, session, candidate, claimed, nameMatch);
 					// A candidate is passed as an override, but it isn't the user's
@@ -4331,15 +5029,26 @@ function init(): void {
 				}
 				const movie = borrowed && mapping.status === "matched" ? mapping.movie : undefined;
 				const problem = movie ? await borrowedMovieProblem(mediaId, media, metadata, id, movie) : undefined;
-				if (problem) mapping = { status: "failed", reason: `TMDB movie ${id} doesn't fit: ${problem}`, tmdbType: "movie", map: {} };
-				log.debug(`${mediaId}: TMDB ${id} from ${from}: ${mapping.status}${mapping.reason ? ` (${mapping.reason})` : ""}`);
+				if (problem)
+					mapping = {
+						status: "failed",
+						reason: `TMDB movie ${id} doesn't fit: ${problem}`,
+						tmdbType: "movie",
+						map: {},
+					};
+				log.debug(
+					`${mediaId}: TMDB ${id} from ${from}: ${mapping.status}${mapping.reason ? ` (${mapping.reason})` : ""}`,
+				);
 				trace.add("tmdb", mediaId, `TMDB ${id} from ${from}: ${outcome(mapping)}`);
 				const foundType = mapping.tmdbType ?? type;
-				if (!firstValid) firstValid = { id, from, reason: mapping.reason, ...(foundType ? { type: foundType } : {}) };
+				if (!firstValid)
+					firstValid = { id, from, reason: mapping.reason, ...(foundType ? { type: foundType } : {}) };
 				if (mapping.status === "matched") return { id, from, mapping, ...(borrowed ? { borrowed } : {}) };
 				if (!problem || isNaN(startDay)) return undefined;
 				const other = await collectionMovie(mediaId, session, id, startDay);
-				return other ? attempt(other.id, `${from}, its TMDB collection "${other.collection}"`, true, "movie") : undefined;
+				return other
+					? attempt(other.id, `${from}, its TMDB collection "${other.collection}"`, true, "movie")
+					: undefined;
 			};
 
 			if (only) return { found: await attempt(only.id, only.from, false, only.type), firstValid };
@@ -4363,12 +5072,22 @@ function init(): void {
 				const theirs = tmdb.overrides.get(r.id);
 				const settled = [
 					{ id: theirs.tmdbId, from: "its override", type: theirs.tmdbType },
-					{ id: own?.status === "matched" ? own.tmdbId : undefined, from: "its TMDB match", type: own?.tmdbType },
+					{
+						id: own?.status === "matched" ? own.tmdbId : undefined,
+						from: "its TMDB match",
+						type: own?.tmdbType,
+					},
 				].filter((c): c is { id: number; from: string; type: "tv" | "movie" | undefined } => !!c.id);
-				const theirIds = async () => (settled as { id: number; from: string; type?: "tv" | "movie" }[]).concat(await knownIds(r.id));
+				const theirIds = async () =>
+					(settled as { id: number; from: string; type?: "tv" | "movie" }[]).concat(await knownIds(r.id));
 				for (const list of [theirIds, () => animeapiIds(r.id)]) {
 					for (const candidate of await list()) {
-						found = await attempt(candidate.id, `${r.relation} "${r.title}" (${candidate.from})`, true, candidate.type);
+						found = await attempt(
+							candidate.id,
+							`${r.relation} "${r.title}" (${candidate.from})`,
+							true,
+							candidate.type,
+						);
 						if (found) return { found, firstValid };
 					}
 				}
@@ -4383,7 +5102,10 @@ function init(): void {
 			// Enough for any anime TMDB has; one it doesn't have costs no more each time it's retried. Known up front, so the
 			// progress line can count them.
 			const SEARCHES = 10;
-			const planned = Math.min(SEARCHES, titles.map((t) => t.title).filter((t, i, all) => all.indexOf(t) === i).length);
+			const planned = Math.min(
+				SEARCHES,
+				titles.map((t) => t.title).filter((t, i, all) => all.indexOf(t) === i).length,
+			);
 			const searched: string[] = [];
 			for (const { title, from } of titles) {
 				if (found) break;
@@ -4394,16 +5116,21 @@ function init(): void {
 				let results: CEM.TMDBSearchResults["results"] = [];
 				try {
 					const all = (await tmdb.search(title, searchType)).results;
-					results = all.filter((r) => searchType !== "multi" || r.media_type === "tv" || r.media_type === "movie");
+					results = all.filter(
+						(r) => searchType !== "multi" || r.media_type === "tv" || r.media_type === "movie",
+					);
 				} catch {}
 				if (!results.length) trace.add("tmdb", mediaId, `A TMDB search for "${title}" found nothing`);
-				const typeOf = (r: (typeof results)[number]): "tv" | "movie" => (searchType === "multi" ? (r.media_type as "tv" | "movie") : "tv");
+				const typeOf = (r: (typeof results)[number]): "tv" | "movie" =>
+					searchType === "multi" ? (r.media_type as "tv" | "movie") : "tv";
 				// TMDB often has duplicate entries. Of the top 3 that match, take one with stills, and of those the oldest
 				// entry: TMDB IDs are assigned in order (its API doesn't say when an entry was created), so try the lowest
 				// ID first and stop at the first match with stills. The type the format suggests first: the two types'
 				// IDs are counted apart.
 				let bare: Awaited<ReturnType<typeof attempt>>;
-				const top = results.slice(0, 3).sort((a, b) => Number(typeOf(b) === preferred) - Number(typeOf(a) === preferred) || a.id - b.id);
+				const top = results
+					.slice(0, 3)
+					.sort((a, b) => Number(typeOf(b) === preferred) - Number(typeOf(a) === preferred) || a.id - b.id);
 				for (const result of top) {
 					// Named exactly as one of this anime's own titles (TMDB's English or original name)
 					const isOwn = (n?: string) => !!plainTitle(n) && own.some((t) => plainTitle(t) === plainTitle(n));
@@ -4448,7 +5175,12 @@ function init(): void {
 			const { startDay, startYear } = startOf(media, metadata);
 			const episodeTotal = Number(media?.episodes) || 0;
 			const owner = Object.values(thumbnails.all()).find(
-				(r) => r.mediaId !== mediaId && r.status === "matched" && r.tmdbType === "movie" && r.tmdbId === id && !r.borrowed,
+				(r) =>
+					r.mediaId !== mediaId &&
+					r.status === "matched" &&
+					r.tmdbType === "movie" &&
+					r.tmdbId === id &&
+					!r.borrowed,
 			);
 			if (owner) return `it's already the match of anime ${owner.mediaId}, from that anime's own IDs`;
 			// A movie is one episode: an anime with several needs a show (or one movie per episode, in the overrides)
@@ -4459,7 +5191,8 @@ function init(): void {
 			// dates such a movie January 1st
 			const yearOnly = isNaN(startDay) || /-01-01$/.test(movie.release_date ?? "");
 			const yearOf = (day: number) => new Date(day * DAY).getUTCFullYear();
-			const fits = (day: number) => (yearOnly ? !startYear || yearOf(day) === startYear : Math.abs(day - startDay) <= 7);
+			const fits = (day: number) =>
+				yearOnly ? !startYear || yearOf(day) === startYear : Math.abs(day - startDay) <= 7;
 			if (fits(released)) return undefined;
 			// TMDB's release date is the first anywhere, often a festival premiere weeks before the anime came out: its
 			// Japanese releases count instead, else (none listed) any country's
@@ -4468,7 +5201,9 @@ function init(): void {
 			const counted = releases.jp.length ? releases.jp : releases.all;
 			const hit = counted.find((date) => fits(toDay(date)));
 			if (hit) {
-				log.step(`${mediaId}: TMDB movie ${id} came out ${movie.release_date}, ${where} also ${hit}: that fits`);
+				log.step(
+					`${mediaId}: TMDB movie ${id} came out ${movie.release_date}, ${where} also ${hit}: that fits`,
+				);
 				return undefined;
 			}
 			const also = counted.length ? ` (${where}: ${counted.slice(0, 3).join(", ")})` : "";
@@ -4481,7 +5216,9 @@ function init(): void {
 		 * streaming and TV; not disc releases, months later. Empty when TMDB couldn't be asked.
 		 */
 		async function movieReleases(id: number) {
-			type Answer = { results?: { iso_3166_1: string; release_dates?: { release_date?: string; type?: number }[] }[] };
+			type Answer = {
+				results?: { iso_3166_1: string; release_dates?: { release_date?: string; type?: number }[] }[];
+			};
 			let results: NonNullable<Answer["results"]> = [];
 			try {
 				results = (await tmdb.__fetch__<Answer>(`movie/${id}/release_dates`)).results ?? [];
@@ -4503,7 +5240,11 @@ function init(): void {
 		}
 
 		/** A movie that came out more than a year away from this anime: another title. undefined: it may be this one. */
-		function otherYear(media: $app.AL_BaseAnime | undefined, metadata: $app.Metadata_AnimeMetadata | undefined, movie: CEM.TMDBMovieDetails) {
+		function otherYear(
+			media: $app.AL_BaseAnime | undefined,
+			metadata: $app.Metadata_AnimeMetadata | undefined,
+			movie: CEM.TMDBMovieDetails,
+		) {
 			const { startYear } = startOf(media, metadata);
 			const released = toDay(movie.release_date);
 			if (!startYear || isNaN(released)) return undefined;
@@ -4515,18 +5256,30 @@ function init(): void {
 		 * A related anime's movie that isn't this one: TMDB has no relations for movies, but its collection (e.g. "Part 1"
 		 * and "Part 2") may hold the one released when this anime was (within a week of startDay). Only when exactly one did.
 		 */
-		async function collectionMovie(mediaId: number, session: ReturnType<typeof tmdbSession>, id: number, startDay: number) {
+		async function collectionMovie(
+			mediaId: number,
+			session: ReturnType<typeof tmdbSession>,
+			id: number,
+			startDay: number,
+		) {
 			const collection = (await session.details(id, "movie").catch(() => undefined))?.belongs_to_collection;
 			if (!collection) return undefined;
 			let parts: { id: number; release_date?: string }[] = [];
 			try {
-				parts = (await tmdb.__fetch__<{ parts?: { id: number; release_date?: string }[] }>(`collection/${collection.id}`)).parts ?? [];
+				parts =
+					(
+						await tmdb.__fetch__<{ parts?: { id: number; release_date?: string }[] }>(
+							`collection/${collection.id}`,
+						)
+					).parts ?? [];
 			} catch {}
 			const near = parts.filter((p) => p.id !== id && Math.abs(toDay(p.release_date) - startDay) <= 7);
 			const ids = near.map((p) => p.id).join(", ");
 			const then = near.length ? `TMDB ${ids} came out then` : "nothing came out then";
 			log.debug(`${mediaId}: TMDB collection ${collection.id} "${collection.name}": ${then}`);
-			const verdict = near.length ? `TMDB ${ids} came out when this anime did` : "nothing in it came out when this anime did";
+			const verdict = near.length
+				? `TMDB ${ids} came out when this anime did`
+				: "nothing in it came out when this anime did";
 			trace.add("tmdb", mediaId, `Its TMDB collection "${collection.name}": ${verdict}`);
 			return near.length === 1 ? { id: near[0].id, collection: collection.name } : undefined;
 		}
@@ -4540,14 +5293,22 @@ function init(): void {
 		function searchTitles(media: $app.AL_BaseAnime | undefined, related: NonNullable<CEM.RelationStep["next"]>[]) {
 			const titles: { title: string; from: string }[] = [];
 			const title = media?.title;
-			const own = [title?.english, title?.romaji, title?.native, title?.userPreferred, ...((media?.synonyms ?? []) as string[])]
+			const own = [
+				title?.english,
+				title?.romaji,
+				title?.native,
+				title?.userPreferred,
+				...((media?.synonyms ?? []) as string[]),
+			]
 				.map((t) => `${t ?? ""}`.trim())
 				.filter((t) => t.length > 1);
 			for (const t of own) titles.push({ title: t, from: `a TMDB search for "${t}"` });
 			for (const t of own) {
-				for (const short of shortTitles(t)) titles.push({ title: short, from: `a TMDB search for "${short}" (from "${t}")` });
+				for (const short of shortTitles(t))
+					titles.push({ title: short, from: `a TMDB search for "${short}" (from "${t}")` });
 			}
-			for (const r of related) titles.push({ title: r.title, from: `a TMDB search for ${r.relation} "${r.title}"` });
+			for (const r of related)
+				titles.push({ title: r.title, from: `a TMDB search for ${r.relation} "${r.title}"` });
 			return { own, titles };
 		}
 
@@ -4569,7 +5330,10 @@ function init(): void {
 		 * up long after the anime's own dates stopped agreeing with either.
 		 */
 		function anidbEvidence(match: CEM.AnidbMatch | undefined) {
-			return !!match && (match.status === "override" || (match.status === "verified" && !match.byTmdb && anidbLookup()));
+			return (
+				!!match &&
+				(match.status === "override" || (match.status === "verified" && !match.byTmdb && anidbLookup()))
+			);
 		}
 		/**
 		 * The TMDB match, when it may count as evidence for the AniDB one (see anidbEvidence), and only while it's in use:
@@ -4578,7 +5342,8 @@ function init(): void {
 		function tmdbEvidence(mediaId: number) {
 			const record = thumbnails.get(mediaId);
 			if (record?.status !== "matched" || !tmdb.API_KEY) return undefined;
-			const inUse = record.source === "override" ? !!tmdb.overrides.get(mediaId).tmdbId : tmdbOn() && !record.byAnidb;
+			const inUse =
+				record.source === "override" ? !!tmdb.overrides.get(mediaId).tmdbId : tmdbOn() && !record.byAnidb;
 			return inUse ? record : undefined;
 		}
 
@@ -4594,7 +5359,9 @@ function init(): void {
 					log.debug(`${mediaId}: animap.id has no entry (${res.status})`);
 					return undefined;
 				}
-				const url = ((res.json() as { sources?: string[] }).sources ?? []).find((u) => /anidb\.net\/anime\/\d+/.test(u));
+				const url = ((res.json() as { sources?: string[] }).sources ?? []).find((u) =>
+					/anidb\.net\/anime\/\d+/.test(u),
+				);
 				const aid = url ? Number((url.match(/anidb\.net\/anime\/(\d+)/) ?? [])[1]) || undefined : undefined;
 				log.debug(`${mediaId}: animap.id AniDB candidate: ${aid ?? "none"}`);
 				return aid;
@@ -4626,13 +5393,15 @@ function init(): void {
 			return titles.en && plainTitle(titles.en) ? titles.en : undefined;
 		}
 		/** An AniDB episode's summary from its XML (often missing), as AniDB writes it */
-		const anidbSummary = (episodeXml: string) => xmlText((episodeXml.match(/<summary>([\s\S]*?)<\/summary>/) ?? [])[1] ?? "") || undefined;
+		const anidbSummary = (episodeXml: string) =>
+			xmlText((episodeXml.match(/<summary>([\s\S]*?)<\/summary>/) ?? [])[1] ?? "") || undefined;
 		/**
 		 * An AniDB anime's main episodes, from AniDB's HTTP API through proxy.ani.zip. Cached on disk for 14 days.
 		 * Returns null when AniDB has no such anime, undefined when it couldn't be fetched right now.
 		 */
 		async function anidbAnime(aid: number, force = false): Promise<CEM.AnidbAnime | null | undefined> {
-			const cache = $storage.get<Record<number, { at: number; anime?: CEM.AnidbAnime }>>(ANIDB_EPISODES_KEY) ?? {};
+			const cache =
+				$storage.get<Record<number, { at: number; anime?: CEM.AnidbAnime }>>(ANIDB_EPISODES_KEY) ?? {};
 			const hit = cache[aid];
 			if (hit && !force && Date.now() - hit.at < ANIDB_ENTRY_KEEP) return hit.anime ?? null;
 			await spaced("proxy.ani.zip", ANIDB_SPACING);
@@ -4692,7 +5461,8 @@ function init(): void {
 				const episodeCount = Number((xml.match(/<episodecount>(\d+)<\/episodecount>/) ?? [])[1] ?? 0);
 				// AniDB's start and end dates are the first and last episodes' air dates: they date those episodes when
 				// AniDB has no date of their own (often for old specials, e.g. two episodes a year apart)
-				const entryDate = (tag: string) => ((xml.match(new RegExp(`<${tag}>(\\d{4}-\\d{2}-\\d{2})</${tag}>`)) ?? [])[1]);
+				const entryDate = (tag: string) =>
+					(xml.match(new RegExp(`<${tag}>(\\d{4}-\\d{2}-\\d{2})</${tag}>`)) ?? [])[1];
 				const first = main.find((e) => e.n === 1);
 				const last = main.find((e) => episodeCount > 1 && e.n === episodeCount);
 				if (first && !first.airDate && entryDate("startdate")) first.airDate = entryDate("startdate");
@@ -4702,7 +5472,9 @@ function init(): void {
 				log.warn(`AniDB ${aid}: unexpected answer from proxy.ani.zip`, xml.slice(0, 200));
 				return undefined; // an error like a ban or maintenance: don't remember it
 			}
-			log.debug(`AniDB ${aid}: ${anime ? `${anime.main.length} main episodes, ${anime.specials?.length ?? 0} specials` : "not found"}`);
+			log.debug(
+				`AniDB ${aid}: ${anime ? `${anime.main.length} main episodes, ${anime.specials?.length ?? 0} specials` : "not found"}`,
+			);
 			cache[aid] = { at: Date.now(), ...(anime ? { anime } : {}) };
 			$storage.set(ANIDB_EPISODES_KEY, cache);
 			return anime ?? null;
@@ -4728,7 +5500,8 @@ function init(): void {
 			// The first date for an episode counts: TMDB's ahead of the others when asked (the check with them applied)
 			const record = withTmdb === "none" ? undefined : tmdbEvidence(mediaId);
 			const tmdb = () => {
-				for (const [k, d] of Object.entries(record?.episodes ?? {})) if (/^\d+$/.test(k)) add(Number(k), toDay(d.airDate), "TMDB's");
+				for (const [k, d] of Object.entries(record?.episodes ?? {}))
+					if (/^\d+$/.test(k)) add(Number(k), toDay(d.airDate), "TMDB's");
 			};
 			if (withTmdb === "first") tmdb();
 			// Not the episode list the plugin supplies (no Animap entry): its dates are AniDB's own, no evidence for AniDB
@@ -4741,7 +5514,8 @@ function init(): void {
 				if (/^\d+$/.test(k)) add(Number(k), toDay(d.airDate), "your custom metadata");
 			}
 			const next = media?.nextAiringEpisode;
-			if (next?.episode && next.airingAt) add(next.episode, Math.floor((next.airingAt * 1000) / DAY), "AniList's next episode");
+			if (next?.episode && next.airingAt)
+				add(next.episode, Math.floor((next.airingAt * 1000) / DAY), "AniList's next episode");
 			const start = media?.startDate;
 			if (start?.year && start.month && start.day) {
 				add(1, Math.round(Date.UTC(start.year, start.month - 1, start.day) / DAY), "AniList's start date");
@@ -4753,8 +5527,10 @@ function init(): void {
 		function describePoints(points: { n: number; day: number; from?: string }[]) {
 			const bySource: Record<string, number[]> = {};
 			for (const p of points.slice().sort((a, b) => a.n - b.n)) (bySource[p.from ?? "unknown"] ??= []).push(p.n);
-			const date = (n: number) => new Date((points.find((p) => p.n === n)?.day ?? 0) * DAY).toISOString().slice(0, 10);
-			const episodes = (ns: number[]) => (ns.length === 1 ? `episode ${ns[0]} on ${date(ns[0])}` : `episodes ${formatSeasons(ns)}`);
+			const date = (n: number) =>
+				new Date((points.find((p) => p.n === n)?.day ?? 0) * DAY).toISOString().slice(0, 10);
+			const episodes = (ns: number[]) =>
+				ns.length === 1 ? `episode ${ns[0]} on ${date(ns[0])}` : `episodes ${formatSeasons(ns)}`;
 			return Object.keys(bySource)
 				.map((from) => `${episodes(bySource[from])} (${from})`)
 				.join("; ");
@@ -4775,10 +5551,20 @@ function init(): void {
 				for (const n of byTitle[t.title] ?? []) seen[n - t.n] = true;
 				for (const offset of Object.keys(seen)) votes[Number(offset)] = (votes[Number(offset)] ?? 0) + 1;
 			}
-			const ranked = Object.keys(votes).map(Number).sort((a, b) => votes[b] - votes[a]);
+			const ranked = Object.keys(votes)
+				.map(Number)
+				.sort((a, b) => votes[b] - votes[a]);
 			const top = ranked[0];
-			if (top === undefined || votes[top] < 2 || votes[top] * 2 < titles.length || votes[ranked[1]] === votes[top] || top < 0)
-				return fail(`${top === undefined ? 0 : votes[top]} of ${titles.length} episode titles match AniDB ${anime.aid}'s`);
+			if (
+				top === undefined ||
+				votes[top] < 2 ||
+				votes[top] * 2 < titles.length ||
+				votes[ranked[1]] === votes[top] ||
+				top < 0
+			)
+				return fail(
+					`${top === undefined ? 0 : votes[top]} of ${titles.length} episode titles match AniDB ${anime.aid}'s`,
+				);
 			const reason = `${votes[top]} of ${titles.length} episode titles match AniDB ${anime.aid}'s${top ? ` at offset +${top}` : ""}`;
 			return { ok: true, offset: top, reason };
 		}
@@ -4788,7 +5574,12 @@ function init(): void {
 		 * main episode under one offset (a later AniList part of a single AniDB entry has a positive offset), and AniDB
 		 * has enough main episodes for it.
 		 */
-		function verifyAnidb(points: { n: number; day: number }[], anime: CEM.AnidbAnime, episodes: number | undefined, duration?: number) {
+		function verifyAnidb(
+			points: { n: number; day: number }[],
+			anime: CEM.AnidbAnime,
+			episodes: number | undefined,
+			duration?: number,
+		) {
 			const fail = (reason: string) => ({ ok: false, offset: 0, reason });
 			if (!points.length) return fail("no air dates for this anime to compare");
 			if (!anime.main.length) return fail(`AniDB ${anime.aid} lists no main episodes`);
@@ -4817,21 +5608,27 @@ function init(): void {
 			if (offset < 0) return fail(`AniDB ${anime.aid}'s episodes start after this anime's (offset ${offset})`);
 			const early =
 				offset === 0
-					? earlyScreenings((n) => {
-							const anidb = toDay(anime.main.find((e) => e.n === n)?.airDate);
-							const own = points.find((p) => p.n === n)?.day;
-							return !isNaN(anidb) && own !== undefined ? [anidb, own] : undefined;
-						}, Math.max(0, ...points.map((p) => p.n)))
+					? earlyScreenings(
+							(n) => {
+								const anidb = toDay(anime.main.find((e) => e.n === n)?.airDate);
+								const own = points.find((p) => p.n === n)?.day;
+								return !isNaN(anidb) && own !== undefined ? [anidb, own] : undefined;
+							},
+							Math.max(0, ...points.map((p) => p.n)),
+						)
 					: 0;
 			// AniDB lists a new season a few episodes ahead and adds the rest as they near: an upcoming episode it has no
 			// date for yet can't disagree. Aired ones it lacks still count against it.
 			const today = Math.floor(Date.now() / DAY);
-			const unlisted = points.filter((p) => p.day > today && isNaN(toDay(anime.main.find((e) => e.n === p.n + offset)?.airDate))).length;
+			const unlisted = points.filter(
+				(p) => p.day > today && isNaN(toDay(anime.main.find((e) => e.n === p.n + offset)?.airDate)),
+			).length;
 			const compared = points.length - unlisted;
 			const counted = compared - points.filter((p) => p.n <= early).length;
 			const linedUp = `${agree} of ${compared} air date${compared === 1 ? "" : "s"} line${agree === 1 ? "s" : ""} up`;
 			// Several early episodes leave fewer to go by: two at least must line up
-			if (agree < Math.max(early > 1 ? 2 : 1, Math.ceil(counted * 0.8))) return fail(`only ${linedUp} with AniDB ${anime.aid}`);
+			if (agree < Math.max(early > 1 ? 2 : 1, Math.ceil(counted * 0.8)))
+				return fail(`only ${linedUp} with AniDB ${anime.aid}`);
 			const total = Math.max(anime.episodeCount, anime.main[anime.main.length - 1].n);
 			if (episodes && total < offset + episodes) {
 				return fail(`AniDB ${anime.aid} has ${total} main episodes, this anime needs ${offset + episodes}`);
@@ -4845,7 +5642,9 @@ function init(): void {
 			if (duration && typical && (typical > duration * 2 || typical < duration / 2))
 				return fail(`AniDB ${anime.aid}'s episodes run ${typical} min, this anime's ${duration} min`);
 			const at = offset ? ` at offset +${offset}` : "";
-			const upcoming = unlisted ? ` (${unlisted} upcoming episode${unlisted === 1 ? "" : "s"} AniDB doesn't list yet)` : "";
+			const upcoming = unlisted
+				? ` (${unlisted} upcoming episode${unlisted === 1 ? "" : "s"} AniDB doesn't list yet)`
+				: "";
 			let screened = "";
 			if (early === 1) screened = " (AniDB dates episode 1 by an early screening)";
 			else if (early) screened = ` (AniDB dates episodes 1-${early} by early screenings)`;
@@ -4857,7 +5656,12 @@ function init(): void {
 		 * others (one AniDB entry, several MAL and AniList ones) it is: the AniDB main episodes that aired then, if they're
 		 * exactly as many as this anime has, in a row.
 		 */
-		function verifyByYear(anime: CEM.AnidbAnime, media: $app.AL_BaseAnime | undefined, episodes: number | undefined, mal: number) {
+		function verifyByYear(
+			anime: CEM.AnidbAnime,
+			media: $app.AL_BaseAnime | undefined,
+			episodes: number | undefined,
+			mal: number,
+		) {
 			const start = media?.startDate;
 			const year = Number(start?.year) || 0;
 			const month = Number(start?.month) || 0;
@@ -4878,7 +5682,11 @@ function init(): void {
 
 		/** An AniDB entry's specials (S1 as 1), or another lettered type (O1 as 1), in place of its main episodes, for the checks below. */
 		const asMain = (anime: CEM.AnidbAnime, episodes: CEM.AnidbEpisode[]): CEM.AnidbAnime => ({
-			aid: anime.aid, episodeCount: episodes.length, main: episodes, specials: [], malIds: [],
+			aid: anime.aid,
+			episodeCount: episodes.length,
+			main: episodes,
+			specials: [],
+			malIds: [],
 		});
 		const asSpecials = (anime: CEM.AnidbAnime) => asMain(anime, anime.specials);
 		/**
@@ -4935,7 +5743,9 @@ function init(): void {
 			const { points, verify } = anidbVerifier(mediaId, media, metadata);
 			const reasons: string[] = [];
 			let transient = false;
-			const sources: AnidbSource[] = only ? [[only.from, async () => only.aid, only.related]] : ownAnidbSources(mediaId);
+			const sources: AnidbSource[] = only
+				? [[only.from, async () => only.aid, only.related]]
+				: ownAnidbSources(mediaId);
 			// Parent and prequels last, looked up only if this anime's own IDs gave nothing usable
 			const own = only ? Infinity : sources.length;
 			const tried: number[] = [];
@@ -4970,7 +5780,9 @@ function init(): void {
 				reasons.push(`AniDB ${aid} (${from}): ${verdict.reason}`);
 			}
 			return {
-				reason: reasons.length ? reasons.join("; ") : "no AniDB ID from ani.zip, AnimeAPI, animap.id or related anime",
+				reason: reasons.length
+					? reasons.join("; ")
+					: "no AniDB ID from ani.zip, AnimeAPI, animap.id or related anime",
 				transient,
 			};
 		}
@@ -4991,13 +5803,17 @@ function init(): void {
 				const label = `${related.relation} "${related.title}"`;
 				const ownMain = related.episodes ?? 0;
 				sources.push(
-					[`${label} (Animap)`, async () => {
-						try {
-							return (await loadMetadata(related.id))?.mappings?.anidbId || undefined;
-						} catch {
-							return undefined;
-						}
-					}, ownMain],
+					[
+						`${label} (Animap)`,
+						async () => {
+							try {
+								return (await loadMetadata(related.id))?.mappings?.anidbId || undefined;
+							} catch {
+								return undefined;
+							}
+						},
+						ownMain,
+					],
 					[`${label} (ani.zip)`, async () => (await anizip(related.id)).anidbId, ownMain],
 					[`${label} (animap.id)`, () => animapIdAnidb(related.id), ownMain],
 				);
@@ -5011,7 +5827,11 @@ function init(): void {
 		 * episode titles. verify: an entry (or its specials) checked against the anime's own air dates, else with TMDB's
 		 * ahead of them, else by episode title; byTmdb when it only lined up with TMDB's help.
 		 */
-		function anidbVerifier(mediaId: number, media: $app.AL_BaseAnime | undefined, metadata: $app.Metadata_AnimeMetadata | undefined) {
+		function anidbVerifier(
+			mediaId: number,
+			media: $app.AL_BaseAnime | undefined,
+			metadata: $app.Metadata_AnimeMetadata | undefined,
+		) {
 			const points = airDatePoints(mediaId, media, metadata);
 			// The same with TMDB's dates (the anime's TMDB match) ahead of the anime's own, where they differ: tried too
 			const withTmdb = airDatePoints(mediaId, media, metadata, "first");
@@ -5020,13 +5840,22 @@ function init(): void {
 			const tmdbDiffers = days(withTmdb) !== days(points);
 			log.debug(`${mediaId}: AniDB lookup with ${points.length} known air date(s)`);
 			log.inspect(`${mediaId}: air dates checked against AniDB`, points);
-			trace.add("anidb", mediaId, points.length ? `Air dates to compare: ${describePoints(points)}` : "No air dates to compare");
+			trace.add(
+				"anidb",
+				mediaId,
+				points.length ? `Air dates to compare: ${describePoints(points)}` : "No air dates to compare",
+			);
 			// Dates that can't count: AniDB's own, and TMDB's when its match only lined up with them (see anidbEvidence)
 			if (animap.get(mediaId)?.fallback && Object.values(metadata?.episodes ?? {}).some((e) => !!e?.airDate))
-				trace.add("anidb", mediaId, "Not compared: the episode list's dates, which are AniDB's (the plugin supplies the list)");
+				trace.add(
+					"anidb",
+					mediaId,
+					"Not compared: the episode list's dates, which are AniDB's (the plugin supplies the list)",
+				);
 			const unused = thumbnails.get(mediaId);
 			if (unused?.status === "matched" && !tmdbEvidence(mediaId)) {
-				const why = unused.byAnidb && tmdbOn() ? "its match only lined up with AniDB's" : "its match isn't in use";
+				const why =
+					unused.byAnidb && tmdbOn() ? "its match only lined up with AniDB's" : "its match isn't in use";
 				trace.add("anidb", mediaId, `Not compared: TMDB's dates, ${why}`);
 			}
 			const episodes = Number(media?.episodes) || undefined;
@@ -5040,7 +5869,8 @@ function init(): void {
 					}
 				if (withTmdb)
 					for (const [k, ep] of Object.entries(tmdbEvidence(mediaId)?.episodes ?? {})) {
-						if (/^\d+$/.test(k) && !out[Number(k)] && plainTitle(ep.title)) out[Number(k)] = plainTitle(ep.title);
+						if (/^\d+$/.test(k) && !out[Number(k)] && plainTitle(ep.title))
+							out[Number(k)] = plainTitle(ep.title);
 					}
 				return Object.keys(out).map((n) => ({ n: Number(n), title: out[Number(n)] }));
 			};
@@ -5050,20 +5880,30 @@ function init(): void {
 				const check = verifyAnidb(points, anime, episodes, duration);
 				if (check.ok) {
 					// Only with TMDB's dates among them: it can't vouch for that match in turn
-					const own = points.length === ownPoints.length || verifyAnidb(ownPoints, anime, episodes, duration).ok;
+					const own =
+						points.length === ownPoints.length || verifyAnidb(ownPoints, anime, episodes, duration).ok;
 					return own ? check : { ...check, byTmdb: true };
 				}
 				if (tmdbDiffers) {
 					const other = verifyAnidb(withTmdb, anime, episodes, duration);
 					if (other.ok) {
-						return { ...other, reason: `${other.reason} with TMDB's air dates (the anime's own: ${check.reason})`, byTmdb: true };
+						return {
+							...other,
+							reason: `${other.reason} with TMDB's air dates (the anime's own: ${check.reason})`,
+							byTmdb: true,
+						};
 					}
 				}
 				const byTitle = verifyAnidbTitles(ownTitles, anime);
 				if (byTitle.ok) return { ...byTitle, reason: `${byTitle.reason} (air dates: ${check.reason})` };
-				const withTmdbTitles = allTitles.length > ownTitles.length ? verifyAnidbTitles(allTitles, anime) : byTitle;
+				const withTmdbTitles =
+					allTitles.length > ownTitles.length ? verifyAnidbTitles(allTitles, anime) : byTitle;
 				if (withTmdbTitles.ok) {
-					return { ...withTmdbTitles, reason: `${withTmdbTitles.reason}, with TMDB's (air dates: ${check.reason})`, byTmdb: true };
+					return {
+						...withTmdbTitles,
+						reason: `${withTmdbTitles.reason}, with TMDB's (air dates: ${check.reason})`,
+						byTmdb: true,
+					};
 				}
 				return check;
 			};
@@ -5094,23 +5934,44 @@ function init(): void {
 			// anime, whatever the air dates say (an early screening, dates a week apart). An entry MAL splits into parts
 			// still needs the dates for which part this is.
 			if (!related && !check.ok && mal && anime.malIds?.length === 1 && anime.malIds[0] === mal) {
-				log.debug(`${mediaId}: AniDB ${aid} from ${from}: ${check.reason}, but it links this anime's MAL entry ${mal}`);
-				check = { ok: true, offset: 0, reason: `it links this anime's MyAnimeList entry ${mal} (air dates: ${check.reason})` };
+				log.debug(
+					`${mediaId}: AniDB ${aid} from ${from}: ${check.reason}, but it links this anime's MAL entry ${mal}`,
+				);
+				check = {
+					ok: true,
+					offset: 0,
+					reason: `it links this anime's MyAnimeList entry ${mal} (air dates: ${check.reason})`,
+				};
 			}
 			// An old special AniList dates by year only: the year says which of the entry's episodes it is
-			if (!check.ok && mal && anime.malIds.indexOf(mal) !== -1) check = verifyByYear(anime, media, episodes, mal) ?? check;
+			if (!check.ok && mal && anime.malIds.indexOf(mal) !== -1)
+				check = verifyByYear(anime, media, episodes, mal) ?? check;
 			// A related anime's main episodes are that anime's own (e.g. a mini anime airing right after each episode of
 			// its parent, same dates): this anime may only take ones past them, else AniDB's specials
 			const taken = check.ok && related ? (relatedEpisodes as number) : 0;
 			if (taken && check.offset < taken) {
-				check = { ok: false, offset: 0, reason: `AniDB ${aid}'s main episodes 1-${taken} are ${from.replace(/ \(.*$/, "")}'s own` };
+				check = {
+					ok: false,
+					offset: 0,
+					reason: `AniDB ${aid}'s main episodes 1-${taken} are ${from.replace(/ \(.*$/, "")}'s own`,
+				};
 			}
 			log.debug(`${mediaId}: AniDB ${aid} from ${from}: ${check.ok ? "verified" : "rejected"}, ${check.reason}`);
 			trace.add("anidb", mediaId, `${from}: AniDB ${aid} ${check.ok ? "fits" : "doesn't fit"}: ${check.reason}`);
 			// AniList's count only: one taken from the air dates would cut off an airing anime's later episodes
-			const extra = { ...(check.byTmdb ? { byTmdb: true } : {}), ...(related ? { related: relatedEpisodes } : {}) };
+			const extra = {
+				...(check.byTmdb ? { byTmdb: true } : {}),
+				...(related ? { related: relatedEpisodes } : {}),
+			};
 			if (check.ok) {
-				return { aid, offset: check.offset, ...matchEpisodes(anime, check.offset, false, episodes), from, reason: check.reason, ...extra };
+				return {
+					aid,
+					offset: check.offset,
+					...matchEpisodes(anime, check.offset, false, episodes),
+					from,
+					reason: check.reason,
+					...extra,
+				};
 			}
 			// A related anime's AniDB entry whose main episodes aren't this anime's: its specials may be (a mini anime,
 			// shorts released between the episodes)
@@ -5118,9 +5979,16 @@ function init(): void {
 				const count = episodes ?? Math.max(1, ...points.map((p) => p.n));
 				const sp = verify(asSpecials(anime));
 				log.debug(`${mediaId}: AniDB ${aid}'s specials: ${sp.ok ? "verified" : "rejected"}, ${sp.reason}`);
-				trace.add("anidb", mediaId, `Its specials instead: ${sp.ok ? "they fit" : "they don't fit"}: ${sp.reason}`);
+				trace.add(
+					"anidb",
+					mediaId,
+					`Its specials instead: ${sp.ok ? "they fit" : "they don't fit"}: ${sp.reason}`,
+				);
 				if (sp.ok && sp.offset + count <= anime.specials[anime.specials.length - 1].n) {
-					const withSpecials = sp.reason.replace(/ lines? up/, (up) => `${up} with its special${count === 1 ? "" : "s"}`);
+					const withSpecials = sp.reason.replace(
+						/ lines? up/,
+						(up) => `${up} with its special${count === 1 ? "" : "s"}`,
+					);
 					const which = sp.offset ? "" : count === 1 ? " (S1)" : ` (S1-S${count})`;
 					return {
 						aid,
@@ -5148,7 +6016,11 @@ function init(): void {
 		 * given; otherwise a verified match, remembered for good (episode IDs refreshed every 14 days), or "none",
 		 * remembered for 14 days.
 		 */
-		async function resolveAnidb(mediaId: number, force = false, scope: Scope = "page"): Promise<CEM.AnidbMatch | undefined> {
+		async function resolveAnidb(
+			mediaId: number,
+			force = false,
+			scope: Scope = "page",
+		): Promise<CEM.AnidbMatch | undefined> {
 			const override = tmdb.overrides.get(mediaId);
 			const existing = anidbStore.get(mediaId);
 			const now = Date.now();
@@ -5162,7 +6034,8 @@ function init(): void {
 			if (override.anidbId) {
 				const offset = override.anidbOffset ?? 0;
 				const letter = override.anidbLetter;
-				const same = existing?.status === "override" && existing.aid === override.anidbId && existing.offset === offset;
+				const same =
+					existing?.status === "override" && existing.aid === override.anidbId && existing.offset === offset;
 				const sameKind = existing?.letter === letter && (!override.anidbSpecials || !!existing?.specials);
 				if (!force && same && sameKind && fresh(existing)) return existing;
 				const noEpisodes = { eids: {}, airDates: {} };
@@ -5182,13 +6055,31 @@ function init(): void {
 					count = Number(media?.episodes) || undefined;
 					const points = airDatePoints(mediaId, media, metadata);
 					const duration = Number(media?.duration) || undefined;
-					specials = !verifyAnidb(points, anime, count, duration).ok && verifyAnidb(points, asSpecials(anime), count, duration).ok;
-					if (specials) log.step(`${mediaId}: your AniDB ${override.anidbId}: the air dates fit its specials, not its main episodes`);
+					specials =
+						!verifyAnidb(points, anime, count, duration).ok &&
+						verifyAnidb(points, asSpecials(anime), count, duration).ok;
+					if (specials)
+						log.step(
+							`${mediaId}: your AniDB ${override.anidbId}: the air dates fit its specials, not its main episodes`,
+						);
 				}
 				const match: CEM.AnidbMatch = {
-					mediaId, status: "override", aid: override.anidbId, offset,
-					...(anime ? matchEpisodes(letter ? asMain(anime, anime.lettered?.[letter] ?? []) : anime, offset, specials, count) : noEpisodes),
-					from: "your override", checkedAt: now, ...(specials ? { specials } : {}), ...(letter ? { letter } : {}),
+					mediaId,
+					status: "override",
+					aid: override.anidbId,
+					offset,
+					...(anime
+						? matchEpisodes(
+								letter ? asMain(anime, anime.lettered?.[letter] ?? []) : anime,
+								offset,
+								specials,
+								count,
+							)
+						: noEpisodes),
+					from: "your override",
+					checkedAt: now,
+					...(specials ? { specials } : {}),
+					...(letter ? { letter } : {}),
 				};
 				saveAnidb(mediaId, match);
 				return match;
@@ -5207,7 +6098,8 @@ function init(): void {
 				const episodes = tmdbEvidence(mediaId)?.episodes ?? {};
 				return Object.keys(episodes).filter((k) => /^\d+$/.test(k) && episodes[k]?.airDate).length;
 			};
-			const moreDates = () => tmdbDated() > (existing?.tmdbPoints ?? (existing?.status === "verified" ? 0 : Infinity));
+			const moreDates = () =>
+				tmdbDated() > (existing?.tmdbPoints ?? (existing?.status === "verified" ? 0 : Infinity));
 			const verified = (found: Extract<AnidbFound, { aid: number }>): CEM.AnidbMatch => {
 				// A failed TMDB match may line up with the new AniDB entry's dates: due now instead of at its weekly retry
 				const record = thumbnails.get(mediaId);
@@ -5215,7 +6107,12 @@ function init(): void {
 					thumbnails.set(mediaId, { ...record, nextCheckAt: now });
 				}
 				const match: CEM.AnidbMatch = {
-					mediaId, status: "verified", ...found, ...trace.end("anidb", mediaId), checkedAt: now, tmdbPoints: tmdbDated(),
+					mediaId,
+					status: "verified",
+					...found,
+					...trace.end("anidb", mediaId),
+					checkedAt: now,
+					tmdbPoints: tmdbDated(),
 				};
 				saveAnidb(mediaId, match);
 				return match;
@@ -5228,7 +6125,11 @@ function init(): void {
 				const counts = `TMDB now has ${tmdbDated()} air dates that can count, ${existing.tmdbPoints ?? 0} before`;
 				trace.add("anidb", mediaId, `AniDB ${existing.aid} checked again: ${counts}`);
 				const related = existing.related ?? (existing.specials ? 0 : undefined);
-				const again = await findAnidb(mediaId, media, metadata, scope, { aid: existing.aid!, from: existing.from ?? "a lookup", related });
+				const again = await findAnidb(mediaId, media, metadata, scope, {
+					aid: existing.aid!,
+					from: existing.from ?? "a lookup",
+					related,
+				});
 				if (again.aid) {
 					log.step(`${mediaId}: AniDB ${again.aid} checked again with TMDB's air dates: ${again.reason}`);
 					return verified(again);
@@ -5273,14 +6174,18 @@ function init(): void {
 				const stored = anidbStore.get(mediaId);
 				if (!found.aid || (stored && stored.status !== "none")) {
 					trace.end("anidb", mediaId);
-					log.step(`${name} (${mediaId}): another AniDB lookup finished first; keeping its result (${stored?.status ?? "nothing"})`);
+					log.step(
+						`${name} (${mediaId}): another AniDB lookup finished first; keeping its result (${stored?.status ?? "nothing"})`,
+					);
 					return stored?.status === "none" ? undefined : stored;
 				}
 			}
 			if (found.aid) {
 				const match = verified(found);
 				const eids = Object.keys(found.eids).length;
-				log.info(`${name} (${mediaId}): AniDB ${found.aid} from ${found.from} verified (${found.reason}), ${eids} episode IDs`);
+				log.info(
+					`${name} (${mediaId}): AniDB ${found.aid} from ${found.from} verified (${found.reason}), ${eids} episode IDs`,
+				);
 				log.inspect(`${mediaId}: AniDB match`, match);
 				return match;
 			}
@@ -5288,7 +6193,12 @@ function init(): void {
 			// A request that failed is retried next time; a real "no" is remembered for 14 days (and no ID is stored)
 			if (!found.transient)
 				saveAnidb(mediaId, {
-					mediaId, status: "none", reason: found.reason, ...trace.end("anidb", mediaId), checkedAt: now, tmdbPoints: tmdbDated(),
+					mediaId,
+					status: "none",
+					reason: found.reason,
+					...trace.end("anidb", mediaId),
+					checkedAt: now,
+					tmdbPoints: tmdbDated(),
 				});
 			return undefined;
 		}
@@ -5359,10 +6269,13 @@ function init(): void {
 						for (const entry of list?.entries ?? []) {
 							const status = `${entry?.status ?? ""}`;
 							const id = entry?.media?.id;
-							if (id && (status === "CURRENT" || status === "REPEATING") && ids.indexOf(id) === -1) ids.push(id);
+							if (id && (status === "CURRENT" || status === "REPEATING") && ids.indexOf(id) === -1)
+								ids.push(id);
 							// Planned anime that air now or within a week: the home page's Upcoming Episodes shows them too
 							const airingAt = Number(entry?.media?.nextAiringEpisode?.airingAt) || 0;
-							const airing = `${entry?.media?.status ?? ""}` === "RELEASING" || (airingAt > 0 && airingAt * 1000 - now < 7 * DAY);
+							const airing =
+								`${entry?.media?.status ?? ""}` === "RELEASING" ||
+								(airingAt > 0 && airingAt * 1000 - now < 7 * DAY);
 							if (id && status === "PLANNING" && airing && upcoming.indexOf(id) === -1) upcoming.push(id);
 						}
 				}
@@ -5449,7 +6362,10 @@ function init(): void {
 		function rebuildShows() {
 			if (currentPath === "/") {
 				const ids = watchingIds();
-				return ids === null || rebuildIds.some((id) => ids.indexOf(id) !== -1 || watching.upcoming.indexOf(id) !== -1);
+				return (
+					ids === null ||
+					rebuildIds.some((id) => ids.indexOf(id) !== -1 || watching.upcoming.indexOf(id) !== -1)
+				);
 			}
 			const open = currentMedia.get()?.id;
 			return open !== undefined && rebuildIds.indexOf(open) !== -1;
@@ -5470,14 +6386,18 @@ function init(): void {
 		/** Not urgent and not on a page that shows the change: the rebuild waits (and says so) */
 		function rebuildWaits() {
 			if (rebuildUrgent || rebuildShows()) return false;
-			log.step(`Rebuild for ${rebuildIds.join(", ")} waits for a page that shows them (home or their entry page)`);
+			log.step(
+				`Rebuild for ${rebuildIds.join(", ")} waits for a page that shows them (home or their entry page)`,
+			);
 			return true;
 		}
 		function armRebuild() {
 			if (rebuildWaits()) return;
 			cancelRebuild?.();
 			const wait = rebuildUrgent ? 1000 : Math.max(1000, lastRebuild + REBUILD_GAP - Date.now());
-			const when = rebuildUrgent ? "now" : `in ${Math.round(wait / 1000)}s (at most every ${REBUILD_GAP / 1000}s)`;
+			const when = rebuildUrgent
+				? "now"
+				: `in ${Math.round(wait / 1000)}s (at most every ${REBUILD_GAP / 1000}s)`;
 			log.step(`Rebuild ${when} for ${rebuildIds.length ? rebuildIds.join(", ") : "all anime"}`);
 			cancelRebuild = ctx.setTimeout(rebuild, wait);
 		}
@@ -5520,7 +6440,9 @@ function init(): void {
 				"ANIME-ENTRIES-get-missing-episodes",
 			]);
 			log.mark("Rebuild");
-			log.info(`Rebuilt Seanime's episode data${refreshCollection ? " and refreshed the AniList collection" : ""}`);
+			log.info(
+				`Rebuilt Seanime's episode data${refreshCollection ? " and refreshed the AniList collection" : ""}`,
+			);
 		}
 
 		/**
@@ -5568,8 +6490,13 @@ function init(): void {
 						tray.div(
 							[
 								tray.text("Custom Episode Metadata for", { className: "text-sm" }),
-								tray.text(`${media.title}`, { className: "font-bold text-xl line-clamp-2 break-normal text-pretty leading-tight" }),
-								tray.text(`Episode ${episode?.episode}`, { className: `text-sm`, style: { display: episode ? "block" : "none" } }),
+								tray.text(`${media.title}`, {
+									className: "font-bold text-xl line-clamp-2 break-normal text-pretty leading-tight",
+								}),
+								tray.text(`Episode ${episode?.episode}`, {
+									className: `text-sm`,
+									style: { display: episode ? "block" : "none" },
+								}),
 							],
 							{ className: "space-y-1 font-semibold h-28" },
 						),
@@ -5591,25 +6518,27 @@ function init(): void {
 			if (rebuildPending) armRebuild();
 		});
 
-		(["library", "torrentstream", "debridstream", "undownloaded", "medialinks", "mediastream"] as const).forEach((type) => {
-			const gridItem = ctx.action.newEpisodeGridItemMenuItem({ type, label: "Edit Custom Metadata " });
-			gridItem.mount();
-			gridItem.onClick(({ episode, type }) => {
-				tray.close();
-				if (!isAnimeEpisode(episode, type)) return;
-				if (!episode.baseAnime) return ctx.toast.error(`Unable to retrieve anime metadata.`);
+		(["library", "torrentstream", "debridstream", "undownloaded", "medialinks", "mediastream"] as const).forEach(
+			(type) => {
+				const gridItem = ctx.action.newEpisodeGridItemMenuItem({ type, label: "Edit Custom Metadata " });
+				gridItem.mount();
+				gridItem.onClick(({ episode, type }) => {
+					tray.close();
+					if (!isAnimeEpisode(episode, type)) return;
+					if (!episode.baseAnime) return ctx.toast.error(`Unable to retrieve anime metadata.`);
 
-				const aniDBEpisode = episode.aniDBEpisode ?? episode.fileMetadata?.aniDBEpisode;
-				if (!aniDBEpisode) return ctx.toast.error("Unable to process aniDBEpisode.");
+					const aniDBEpisode = episode.aniDBEpisode ?? episode.fileMetadata?.aniDBEpisode;
+					if (!aniDBEpisode) return ctx.toast.error("Unable to process aniDBEpisode.");
 
-				const customEpisodeEntry = database.get(episode.baseAnime.id);
-				const customEpisodeMetadata = customEpisodeEntry.data[aniDBEpisode] ?? { episode: aniDBEpisode };
-				// The override fields fill when the overrides modal opens
-				currEditedEp.set(customEpisodeMetadata);
-				confirming.set(null);
-				ctx.setTimeout(() => tray.open(), 500);
-			});
-		});
+					const customEpisodeEntry = database.get(episode.baseAnime.id);
+					const customEpisodeMetadata = customEpisodeEntry.data[aniDBEpisode] ?? { episode: aniDBEpisode };
+					// The override fields fill when the overrides modal opens
+					currEditedEp.set(customEpisodeMetadata);
+					confirming.set(null);
+					ctx.setTimeout(() => tray.open(), 500);
+				});
+			},
+		);
 
 		ctx.effect(() => {
 			const currEditedEpData = currEditedEp.get();
@@ -5618,9 +6547,12 @@ function init(): void {
 		}, [currEditedEp]);
 		/**
 		 * Seanime keeps the metadata it built in memory for up to an hour, with the stills, fill-in data and AniDB IDs
-		 * baked in, so switching a setting showed nothing until a restart. Changing a setting reloads the plugin: when a
-		 * setting that changes what the hooks add differs from the last applied one, have Seanime rebuild its metadata
-		 * once. The plugin's own TMDB and AniDB data on disk is kept, so nothing is fetched from TMDB again.
+		 * baked in. Two things leave it without what the plugin adds, so it's rebuilt once the plugin has loaded:
+		 * - Seanime starting: it builds the metadata of the anime on screen while it loads its plugins, and this one often
+		 *   loads after that, so its hooks never saw those builds (no stills, and no AniDB ID for the tray, which reads it
+		 *   from the hooks).
+		 * - A setting that changes what the hooks add (saving the settings reloads the plugin).
+		 * The plugin's own TMDB and AniDB data on disk is kept, so nothing is fetched from TMDB again.
 		 */
 		const displaySettings = JSON.stringify({
 			size: stillImageSize ?? "w1280",
@@ -5632,22 +6564,25 @@ function init(): void {
 			token: tokenPrint,
 		});
 		const appliedSettings = $storage.get<string>("CEM_APPLIED_SETTINGS");
+		const settingsChanged = appliedSettings != null && appliedSettings !== displaySettings;
 		if (appliedSettings !== displaySettings) {
 			$storage.set("CEM_APPLIED_SETTINGS", displaySettings);
-			// The first run after an update only knew the image size; don't rebuild for that alone
-			const firstRun = appliedSettings === undefined;
-			if ($storage.get("TMDB_IMAGE_SIZE_APPLIED") !== undefined) $storage.remove("TMDB_IMAGE_SIZE_APPLIED");
-			// Nothing matched or looked up yet (a fresh install, wiped storage): nothing for the new settings to change. A
-			// rebuild then would only hold back the first batch's rebuild (spaced by REBUILD_GAP).
-			const anything = Object.keys(thumbnails.all()).length > 0 || Object.keys(($storage.get("ANIDB_MATCHES_V1") ?? {}) as object).length > 0;
-			if (!firstRun && anything) {
-				// After the plugin finished loading (the rebuild helper and the web page's queries are ready)
-				ctx.setTimeout(() => {
+			if ($storage.get("TMDB_IMAGE_SIZE_APPLIED") != null) $storage.remove("TMDB_IMAGE_SIZE_APPLIED");
+		}
+		// Nothing matched or looked up yet (a fresh install, wiped storage): nothing for a rebuild to add. One then would
+		// only hold back the first batch's rebuild (spaced by REBUILD_GAP).
+		const anything =
+			Object.keys(thumbnails.all()).length > 0 ||
+			Object.keys(($storage.get("ANIDB_MATCHES_V1") ?? {}) as object).length > 0;
+		if (anything) {
+			// After the plugin finished loading (the rebuild helper and the web page's queries are ready)
+			ctx.setTimeout(() => {
+				if (settingsChanged) {
 					log.mark("Settings changed");
 					log.info(`Settings changed, rebuilding Seanime's episode data (${displaySettings})`);
-					scheduleRebuild(true);
-				}, 1000);
-			}
+				} else log.mark("Plugin loaded: rebuilding what Seanime built before it");
+				scheduleRebuild(true);
+			}, 1000);
 		}
 		log.step(`Settings: ${displaySettings}`);
 		/**
@@ -5718,7 +6653,9 @@ function init(): void {
 				.map(Number)
 				.sort((a, b) => taken[a] - taken[b]);
 			const batch = ++batches;
-			log.mark(`Batch ${batch}: ${ids.length} anime Seanime loaded${waited && !settled ? ` (still loading after ${cap / 1000}s)` : ""}`);
+			log.mark(
+				`Batch ${batch}: ${ids.length} anime Seanime loaded${waited && !settled ? ` (still loading after ${cap / 1000}s)` : ""}`,
+			);
 			log.inspect(`batch ${batch}`, ids);
 			log.time(`batch ${batch}`);
 			(async () => {
@@ -5748,19 +6685,22 @@ function init(): void {
 
 		// Empty kept metadata copies once they're too old to use ($store has no delete), so a long session with a big
 		// library doesn't hold one for every anime it ever loaded
-		ctx.setInterval(() => {
-			const now = Date.now();
-			let emptied = 0;
-			for (const [key, value] of Object.entries($store.getAll() ?? {})) {
-				if (key.indexOf("CEM_META_") !== 0 || key === "CEM_META_CLEARED" || !value) continue;
-				try {
-					if (now - (JSON.parse(`${value}`) as { at: number }).at < HOUR) continue;
-				} catch {}
-				$store.set(key, "");
-				emptied++;
-			}
-			if (emptied) log.debug(`Emptied ${emptied} kept metadata copies over an hour old`);
-		}, 10 * 60 * 1000);
+		ctx.setInterval(
+			() => {
+				const now = Date.now();
+				let emptied = 0;
+				for (const [key, value] of Object.entries($store.getAll() ?? {})) {
+					if (key.indexOf("CEM_META_") !== 0 || key === "CEM_META_CLEARED" || !value) continue;
+					try {
+						if (now - (JSON.parse(`${value}`) as { at: number }).at < HOUR) continue;
+					} catch {}
+					$store.set(key, "");
+					emptied++;
+				}
+				if (emptied) log.debug(`Emptied ${emptied} kept metadata copies over an hour old`);
+			},
+			10 * 60 * 1000,
+		);
 
 		// Forget anime not seen for 60 days, unless their custom metadata still needs the match
 		ctx.setTimeout(() => {
@@ -5771,7 +6711,8 @@ function init(): void {
 				thumbnails.set(Number(key), null);
 				forgotten.push(Number(key));
 			}
-			if (forgotten.length) log.info(`Forgot the TMDB matches of ${forgotten.length} anime not seen for 60 days`, forgotten);
+			if (forgotten.length)
+				log.info(`Forgot the TMDB matches of ${forgotten.length} anime not seen for 60 days`, forgotten);
 		}, 5000);
 
 		ctx.screen.onNavigate(async ({ pathname, searchParams }) => {
@@ -5787,7 +6728,11 @@ function init(): void {
 			currentMedia.set({
 				id: entry.mediaId,
 				// No banner: the cover, as Seanime's own pages do
-				banner: entry.media?.bannerImage || entry.media?.coverImage?.extraLarge || entry.media?.coverImage?.large || "",
+				banner:
+					entry.media?.bannerImage ||
+					entry.media?.coverImage?.extraLarge ||
+					entry.media?.coverImage?.large ||
+					"",
 				title: entry.media?.title?.userPreferred ?? "",
 				type: entry.media?.format?.valueOf() === "MOVIE" ? "movie" : "tv",
 			});

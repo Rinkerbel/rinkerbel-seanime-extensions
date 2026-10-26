@@ -681,7 +681,9 @@ are spaced out:
 - **Right away (after a second):**
   - changes to the anime whose page is open;
   - anything you did yourself;
-  - a settings change that affects what's shown (image size, the switches, the token).
+  - a settings change that affects what's shown (image size, the switches, the token);
+  - the plugin loading (Seanime starting, or saving the settings): Seanime builds what's on screen while it loads its
+    plugins, often before this one, and those builds would otherwise have no stills until the next rebuild.
 - **Background changes** wait until the batch is done, then come at most every **20 seconds**. They only rebuild on a
   page that shows them: the home page (Continue Watching and Upcoming Episodes) or that anime's page. Elsewhere they
   wait until you get there.
