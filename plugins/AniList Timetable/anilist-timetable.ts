@@ -8,11 +8,12 @@
  * AniList Timetable. Contents, in file order:
  *
  * init()
+ *   HOOK             onAnimeScheduleItems: Seanime's Schedule page times, as other plugins left them, into $store
  *   UI CONTEXT       $ui.register, one runtime:
  *     1. Setup              labels, Seanime's class strings, icons, the settings
  *     2. Cache              UTC days of airings in $storage, an hour each
  *     3. AniList schedule   the airing schedule's document, its requests, and what's kept of each answer
- *     4. Timetable          the days the page shows, put together from cached days
+ *     4. Timetable          the days the page shows, put together from cached days, with Seanime's times
  *     5. AniList list       the user's list, their title language, the progress button's saves
  *     6. Seanime's page     its styles for the webview, the Schedule page laid out around the timetable
  *     7. Modal              Seanime's own modal: the date picker on a phone, the settings
@@ -21,6 +22,31 @@
  */
 // @ts-ignore
 function init(): void {
+	// ====================================================================================================================
+	// HOOK: Seanime's Schedule page items, as every plugin has left them
+	// ====================================================================================================================
+
+	// Other plugins can change the times of Seanime's schedule (a LiveChart plugin moves them to LiveChart's). Seanime
+	// builds its items when its Schedule page asks, then runs every plugin's handler in turn; this one runs the rest of
+	// the chain first, so what it reads is what Seanime returns, whichever plugin loaded first (tested in Seanime's goja).
+	// Each item's title, episode and time go to the UI context through $store, as a JSON string (arrays in $store come
+	// back as Go slices). The items are read through JSON: a dateTime is Go's time, whose String() isn't ISO but whose
+	// JSON is. It never throws: a throw makes Seanime return the items as they were before any plugin's handler.
+	$app.onAnimeScheduleItems((e) => {
+		e.next();
+		try {
+			const items: [number, number, number][] = [];
+			for (const it of JSON.parse(JSON.stringify(e.items || [])) || []) {
+				const time = Date.parse(it?.dateTime);
+				if (it && it.mediaId > 0 && it.episodeNumber > 0 && isFinite(time))
+					items.push([it.mediaId, it.episodeNumber, time]);
+			}
+			$store.set("seanime-schedule", JSON.stringify({ at: Date.now(), items }));
+		} catch (err) {
+			console.log("[anilist-timetable] Seanime's schedule unreadable:", String(err));
+		}
+	});
+
 	$ui.register((ctx) => {
 		// ================================================================================================================
 		// 1. Setup
@@ -273,7 +299,7 @@ function init(): void {
 
 		// AniList's airing schedule for a span of time, the request Seanime's Discover page sends for its airing schedule
 		// (Page.airingSchedules between two times), with only the fields the timetable shows. Seanime's own Schedule page
-		// can't be used: it covers only the list (by season), and a plugin can't read its cache, only clear it. AniList
+		// items can't be the source: they cover only the list, with no format or country (they correct times, section 4). AniList
 		// has 15 to 20 airings a day, so pages of 50 (its most), four to a request as aliases: a week and its edges in one
 		// request, which AniList's rate limit (30 a minute while it's degraded) takes easily. No token: the schedule is
 		// public, and the list comes from Seanime.
@@ -446,6 +472,80 @@ function init(): void {
 			return inflight[key];
 		}
 
+		// Seanime's own times (the hook at the top). Where Seanime's Schedule page has an episode of the user's list at
+		// another time than AniList's schedule, another plugin moved it: the timetable shows Seanime's time. Only times
+		// move: an episode Seanime has that AniList's schedule hasn't, or the other way round, is left as AniList has it.
+		// Seanime's items are the titles on the list (but dropped ones), up to 30 aired and 30 coming episodes each, so a
+		// title not on the list, or an episode further off, keeps AniList's time; nothing can have moved those anyway.
+		// Seanime builds its items again whenever its list is (every 10 minutes while signed in to AniList), as its page
+		// then refetches them, so the hook keeps them current; the plugin only asks once it has started
+		// (refreshSeanimeTimes).
+
+		/** Seanime's time of each episode, by `${title}-${episode}`, in ms; null before the hook has run */
+		let seanimeTimes: Record<string, number> | null = null;
+		/** When Seanime last built its items (0: not since the plugin started) */
+		let seanimeAt = 0;
+
+		/** Takes what the hook last put in $store */
+		function takeSeanimeTimes() {
+			try {
+				const raw = $store.get<string>("seanime-schedule");
+				const parsed = raw ? JSON.parse(raw) : null;
+				if (!parsed || !(parsed.at > seanimeAt)) return false;
+				const times: Record<string, number> = {};
+				for (const [id, episode, time] of parsed.items || []) times[`${id}-${episode}`] = time;
+				seanimeTimes = times;
+				seanimeAt = parsed.at;
+				return true;
+			} catch (e) {
+				log("Seanime's schedule unreadable:", errorText(e));
+				return false;
+			}
+		}
+
+		/**
+		 * Has Seanime build its Schedule page's items again, which runs the hook, when there are none since the plugin
+		 * started: Seanime keeps them in its own memory, so after the plugin's start (installed, updated, reloaded) it
+		 * may serve them from there, with no hook. Seanime's cache is cleared and its page's query refetched: that's
+		 * one request of Seanime's to AniList (two with titles from older seasons on the list). Once, and a few seconds
+		 * after the page opens: when Seanime has just started, its page asks for the items itself, and the hook's
+		 * capture comes first.
+		 */
+		let seanimeAsked = false;
+		function refreshSeanimeTimes() {
+			if (seanimeAsked) return;
+			seanimeAsked = true;
+			ctx.setTimeout(() => {
+				if (seanimeAt) return;
+				try {
+					ctx.anime.clearScheduleCache();
+					$app.invalidateClientQuery(["ANIME-COLLECTION-get-anime-collection-schedule"]);
+				} catch (e) {
+					log("Seanime's schedule not refreshed:", errorText(e));
+				}
+			}, 3000);
+		}
+
+		/**
+		 * The days with Seanime's times. An episode stays in its own UTC day whatever its new time: the page finds a
+		 * day's airings in the UTC days around it by their time (slotsOf), and a day is always sent with the same
+		 * airings, so moving one into another day could lose it where that day isn't sent. The cache keeps AniList's.
+		 */
+		function withSeanimeTimes(list: AT.Day[]): AT.Day[] {
+			const times = seanimeTimes;
+			if (!times) return list;
+			return list.map((d) => {
+				let moved = false;
+				const airings = d.airings.map((a) => {
+					const time = times[`${a.anime.id}-${a.episode}`];
+					if (time == null || time === a.time) return a;
+					moved = true;
+					return { ...a, time };
+				});
+				return moved ? { date: d.date, airings: airings.sort((a, b) => a.time - b.time) } : d;
+			});
+		}
+
 		/** The latest week the page asked for (a number): an older one that hasn't started fetching is dropped */
 		let latestWeek = 0;
 		/** The fetch on its way: one at a time */
@@ -465,9 +565,11 @@ function init(): void {
 			const send = (error: string | null) =>
 				webview.channel.send("week", {
 					start,
-					days: dates
-						.concat(fetched.filter((d) => !dates.includes(d) && fresh(d)))
-						.map((d) => cache.days[d]?.data ?? { date: d, airings: [] }),
+					days: withSeanimeTimes(
+						dates
+							.concat(fetched.filter((d) => !dates.includes(d) && fresh(d)))
+							.map((d) => cache.days[d]?.data ?? { date: d, airings: [] }),
+					),
 					error,
 				});
 			// Today's week shows at once, however old, and is asked for again behind it (opening the page and Today are
@@ -1171,10 +1273,24 @@ ${MARK_CSS}
 			// already (from what page() gave it, too) only takes the list from it
 			webview.channel.send("init", initMessage());
 			sendStyles();
+			// The page is open on Seanime's Schedule page, whose query is what refetching asks again (once, see there)
+			refreshSeanimeTimes();
 		});
 
-		/** The first day the page showed last */
+		/** The first day the page showed last, and how many days */
 		let lastStart: string | null = null;
+		let lastCount = 7;
+
+		// Seanime's items built again (the hook ran): the days the page shows last go to it again with the new times,
+		// from the cache (no request). Pages on other days take them when they next ask for days.
+		takeSeanimeTimes();
+		$store.watch<string>("seanime-schedule", () => {
+			if (!takeSeanimeTimes() || !lastStart) return;
+			const days = utcDays(lastStart, lastCount)
+				.map((d) => cache.days[d]?.data)
+				.filter((d): d is AT.Day => !!d);
+			if (days.length) webview.channel.send("days", { days: withSeanimeTimes(days) });
+		});
 
 		/** What the page starts from: the settings, the list and where it was */
 		const initMessage = () => ({ prefs, inferredTitles, lists, lastStart });
@@ -1189,9 +1305,11 @@ ${MARK_CSS}
 			const start = lastStart || todayDate();
 			return {
 				init: initMessage(),
-				days: utcDays(start, 7)
-					.map((d) => cache.days[d]?.data)
-					.filter(Boolean),
+				days: withSeanimeTimes(
+					utcDays(start, 7)
+						.map((d) => cache.days[d]?.data)
+						.filter((d): d is AT.Day => !!d),
+				),
 			};
 		}
 		/** Without it the page starts as before, from ready: a failure here mustn't cost the page */
@@ -1209,7 +1327,8 @@ ${MARK_CSS}
 			// The page opens on the days it showed last, kept in the plugin's memory: a sandboxed frame has nowhere to
 			// keep something per browser, so it's the same for every client, until Seanime or the plugin restarts
 			lastStart = p.start;
-			loadWeek(p.start, Number(p.count) || 7, ++latestWeek);
+			lastCount = Math.max(1, Math.min(7, Number(p.count) || 7));
+			loadWeek(p.start, lastCount, ++latestWeek);
 		});
 
 		// A title clicked (its poster, its name, its list status): its page in Seanime. Seanime's own preview modal
@@ -1561,16 +1680,22 @@ svg.at-icon { width: 1em; height: 1em; flex: none; }
 			/** The UTC days the dates from `start` take: the day before and after too, for time zones off UTC */
 			const neededDays = (start: string) => Array.from({ length: columns + 2 }, (_, i) => addDays(start, i - 1));
 
-			/** A day in the browser's time zone: its airings, from the UTC days around it, by the minute they air */
+			/**
+			 * A day in the browser's time zone: its airings, from the UTC days around it, by the minute they air. Sorted
+			 * here: an episode another plugin moved in Seanime keeps its UTC day, at its new time (withSeanimeTimes).
+			 */
 			function slotsOf(date: string) {
-				const slots: { time: number; clock: string; airings: AT.Airing[] }[] = [];
+				const airings: AT.Airing[] = [];
 				for (const utc of [addDays(date, -1), date, addDays(date, 1)])
-					for (const a of (days[utc] && days[utc].airings) || []) {
-						if (localDate(a.time) !== date) continue;
-						const last = slots[slots.length - 1];
-						if (last && last.time === a.time) last.airings.push(a);
-						else slots.push({ time: a.time, clock: localClock(a.time), airings: [a] });
-					}
+					for (const a of (days[utc] && days[utc].airings) || [])
+						if (localDate(a.time) === date) airings.push(a);
+				airings.sort((a, b) => a.time - b.time);
+				const slots: { time: number; clock: string; airings: AT.Airing[] }[] = [];
+				for (const a of airings) {
+					const last = slots[slots.length - 1];
+					if (last && last.time === a.time) last.airings.push(a);
+					else slots.push({ time: a.time, clock: localClock(a.time), airings: [a] });
+				}
 				return slots;
 			}
 
@@ -2220,6 +2345,12 @@ svg.at-icon { width: 1em; height: 1em; flex: none; }
 				shownStart = msg.start;
 				renderToolbar();
 				renderTimetable();
+			});
+
+			// Days again, with Seanime's newer times (another plugin moved some): in place, drawn again if shown
+			bridge.on("days", (msg: { days: AT.Day[] }) => {
+				for (const day of msg.days || []) days[day.date] = day;
+				if (shownStart) renderTimetable();
 			});
 
 			bridge.on("lists", (msg: { lists: any; inferredTitles?: AT.TitleLanguage }) => {

@@ -18,6 +18,8 @@ https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/pl
 - **Move through the days.** The arrows move a day or a week, Today comes back to today, and the dates open a
   calendar to jump to any day.
 - **Your list on it.** Each title on your list shows its status.
+- **Other plugins' times.** When another plugin changes the times on Seanime's schedule (one using LiveChart's
+  times, say), your list's episodes show at those times.
 - **One click for an episode watched.** For titles you're watching or rewatching, an aired episode has a check that
   sets your progress to it.
 - **Straight to the title.** Click a title, its poster or its status to open its page in Seanime.
