@@ -1,4 +1,4 @@
-/// <reference path="../goja_plugin_types/app.d.ts" />
+/// <reference path="./app.d.ts" />
 
 declare type Settings = {
     supportsAnime: boolean
@@ -15,19 +15,19 @@ declare type ListResponse<T extends $app.AL_BaseAnime | $app.AL_BaseManga> = {
 declare abstract class CustomSource {
     getSettings(): Settings
 
-    async getAnime(ids: number[]): Promise<$app.AL_BaseAnime[]>
+    getAnime(ids: number[]): Promise<$app.AL_BaseAnime[]>
 
-    async getAnimeMetadata(id: number): Promise<$app.Metadata_AnimeMetadata | null>
+    getAnimeMetadata(id: number): Promise<$app.Metadata_AnimeMetadata | null>
 
-    async getAnimeWithRelations(id: number): Promise<$app.AL_CompleteAnime>
+    getAnimeWithRelations(id: number): Promise<$app.AL_CompleteAnime>
 
-    async getAnimeDetails(id: number): Promise<$app.AL_AnimeDetailsById_Media | null>
+    getAnimeDetails(id: number): Promise<$app.AL_AnimeDetailsById_Media | null>
 
-    async getManga(ids: number[]): Promise<$app.AL_BaseManga[]>
+    getManga(ids: number[]): Promise<$app.AL_BaseManga[]>
 
-    async listAnime(search: string, page: number, perPage: number): Promise<ListResponse<$app.AL_BaseAnime>>
+    listAnime(search: string, page: number, perPage: number): Promise<ListResponse<$app.AL_BaseAnime>>
 
-    async getMangaDetails(id: number): Promise<$app.AL_MangaDetailsById_Media | null>
+    getMangaDetails(id: number): Promise<$app.AL_MangaDetailsById_Media | null>
 
-    async listManga(search: string, page: number, perPage: number): Promise<ListResponse<$app.AL_BaseManga>>
+    listManga(search: string, page: number, perPage: number): Promise<ListResponse<$app.AL_BaseManga>>
 }

@@ -2555,7 +2555,7 @@ declare namespace $storage {
      * @returns The value associated with the key
      * @throws Error if something goes wrong
      */
-    function get<T = any>(key: string): T | undefined
+    function get<T = any>(key: string): T | null
 
     /**
      * Gets a value from the storage without cloning.
@@ -2564,7 +2564,7 @@ declare namespace $storage {
      * @returns The value associated with the key
      * @throws Error if something goes wrong
      */
-    function getUnsafe<T = any>(key: string): T | undefined
+    function getUnsafe<T = any>(key: string): T | null
 
     /**
      * Removes a value from the storage.
@@ -2683,7 +2683,7 @@ declare namespace $anilist {
      * Delete a media list entry.
      * The anime/manga collection should be refreshed after deleting the entry.
      */
-    function deleteEntry(mediaId: number): void
+    function deleteEntry(mediaId: number, entryId: number): void
 
     /**
      * Get the user's anime collection.

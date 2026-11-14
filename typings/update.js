@@ -17,6 +17,68 @@ const CONFIG = {
 	timeout: 10_000,
 };
 
+/**
+ * Fixes applied to the downloaded files, each checked against what Seanime's runtime does (see
+ * docs/seanime-api-notes.md). A fix that no longer matches is reported: Seanime changed the file, so check whether
+ * it's still needed.
+ */
+const FIXES = {
+	"custom-source.d.ts": [
+		{
+			why: "the reference points at Seanime's repository layout, not this folder",
+			find: '/// <reference path="../goja_plugin_types/app.d.ts" />',
+			replace: '/// <reference path="./app.d.ts" />',
+		},
+		{
+			why: "`async` isn't allowed on a method in a declaration (TS1040)",
+			find: /^(\s+)async (\w+\()/gm,
+			replace: "$1$2",
+		},
+	],
+	"core.d.ts": [
+		{
+			why: "$await returns the promise's value",
+			find: "declare function $await<T>(promise: Promise<T>): void",
+			replace: "declare function $await<T>(promise: Promise<T>): T",
+		},
+		{
+			why: "the runtime's global is $unmarshal; $unmarshalJSON doesn't exist",
+			find: "declare function $unmarshalJSON(data: any, dst: any): void",
+			replace: "declare function $unmarshal(data: any, dst: any): void",
+		},
+		{
+			why: "$store.get and $store.getUnsafe return null for a missing key",
+			find: /^(\s+function get(?:Unsafe)?<T = any>\(key: string\)): T$/gm,
+			replace: "$1: T | null",
+		},
+	],
+	"plugin.d.ts": [
+		{
+			why: "$storage.get and $storage.getUnsafe return null for a missing key",
+			find: /^(\s+function get(?:Unsafe)?<T = any>\(key: string\)): T \| undefined$/gm,
+			replace: "$1: T | null",
+		},
+		{
+			why: "$anilist.deleteEntry takes the list entry's ID too (Seanime's binding is (mediaID, entryId)); without it AniList answers 400",
+			find: "function deleteEntry(mediaId: number): void",
+			replace: "function deleteEntry(mediaId: number, entryId: number): void",
+		},
+	],
+};
+
+function applyFixes(filename, content) {
+	for (const fix of FIXES[filename] ?? []) {
+		const matched = typeof fix.find === "string" ? content.includes(fix.find) : content.search(fix.find) !== -1;
+		if (!matched) {
+			console.log(`⚠️  Fix no longer matches in ${filename} (${fix.why}): check whether it's still needed`);
+			continue;
+		}
+		content = typeof fix.find === "string" ? content.split(fix.find).join(fix.replace) : content.replace(fix.find, fix.replace);
+		console.log(`🔧 Fixed ${filename}: ${fix.why}`);
+	}
+	return content;
+}
+
 const currentDir = path.dirname(process.argv[1]);
 
 function downloadFile(filename, attempt = 1, sourceDir) {
@@ -124,7 +186,7 @@ async function downloadAllFiles() {
 
 	for (const { filename, sourceDir } of files) {
 		try {
-			const content = await downloadFile(filename, 1, sourceDir);
+			const content = applyFixes(filename, await downloadFile(filename, 1, sourceDir));
 			const filePath = path.join(currentDir, filename);
 
 			const fileExists = fs.existsSync(filePath);

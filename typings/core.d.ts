@@ -88,7 +88,7 @@ declare function $toBytes(value: any): Uint8Array
  */
 declare function $sleep(milliseconds: number): void
 
-declare function $await<T>(promise: Promise<T>): void
+declare function $await<T>(promise: Promise<T>): T
 
 /**
  *
@@ -102,7 +102,7 @@ declare function $arrayOf<T>(model: T): T[]
  * @param dst - The destination to unmarshal the value to. Must be a reference.
  * @throws If unmarshalling fails
  */
-declare function $unmarshalJSON(data: any, dst: any): void
+declare function $unmarshal(data: any, dst: any): void
 
 /**
  * Get a user preference
@@ -676,7 +676,7 @@ declare namespace $store {
      * @param key - The key to get
      * @returns The value associated with the key
      */
-    function get<T = any>(key: string): T
+    function get<T = any>(key: string): T | null
 
     /**
      * Gets a value from the store without cloning.
@@ -684,7 +684,7 @@ declare namespace $store {
      * @param key - The key to get
      * @returns The value associated with the key
      */
-    function getUnsafe<T = any>(key: string): T
+    function getUnsafe<T = any>(key: string): T | null
 
     /**
      * Checks if a key exists in the store.
