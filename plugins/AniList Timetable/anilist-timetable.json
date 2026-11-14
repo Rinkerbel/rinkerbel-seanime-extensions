@@ -10,7 +10,7 @@
 	"icon": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/AniList%20Timetable/icon.png",
 	"website": "",
 	"lang": "en",
-	"readme": "https://github.com/rinkerbel/rinkerbel-seanime-extensions/tree/main/plugins/AniList%20Timetable",
+	"readme": "",
 	"payloadURI": "https://raw.githubusercontent.com/rinkerbel/rinkerbel-seanime-extensions/main/plugins/AniList%20Timetable/anilist-timetable.ts",
 	"plugin": {
 		"version": "1",
